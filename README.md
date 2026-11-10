@@ -45,8 +45,9 @@ PocketBase, where member authentication is already configured.
 
 ## PocketBase data and access
 
-The `table_catalogs` collection stores `title`, `description`, `markdown`, an ordered
-JSON `items` array (`{ title, codes, type, services, description?, url?, catalog? }` per item),
+The `table_catalogs` collection stores `title`, `description`, list-level `content`
+(Markdown), and an ordered JSON `items` array (`{ title, codes, type, services,
+description?, url?, catalog? }` per item),
 `status` (`draft` or `published`), and the authenticated PocketBase user id in
 `owner`. `type` is `set`, `altbuild`, or `moc`; set and alternate-build items
 require at least one code, while MOC codes are optional and may contain multiple

@@ -89,7 +89,7 @@ decodeList =
         (Decode.field "id" Decode.string)
         (Decode.field "title" Decode.string)
         (Decode.maybe (Decode.field "description" Decode.string) |> Decode.map (Maybe.withDefault ""))
-        (Decode.maybe (Decode.field "markdown" Decode.string) |> Decode.map (Maybe.withDefault ""))
+        (Decode.maybe (Decode.field "content" Decode.string) |> Decode.map (Maybe.withDefault ""))
         (Decode.maybe (Decode.field "items" (Decode.list decodeSetItem)) |> Decode.map (Maybe.withDefault []))
         (Decode.field "status" Decode.string |> Decode.map statusFromString)
         (Decode.maybe (Decode.field "owner" Decode.string) |> Decode.map (Maybe.withDefault ""))
@@ -256,7 +256,7 @@ listBody owner form =
     Encode.object
         [ ( "title", Encode.string (String.trim form.title) )
         , ( "description", Encode.string (String.trim form.description) )
-        , ( "markdown", Encode.string form.markdown )
+        , ( "content", Encode.string form.markdown )
         , ( "items"
           , Encode.list encodeSetItem form.items
           )

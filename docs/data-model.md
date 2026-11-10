@@ -50,6 +50,10 @@ the decoder so a future service addition does not break existing records. The
 decoder intentionally does not accept the former `{ "code", "services" }`
 format: local development data is replaced as a collection, not migrated.
 
+`table_catalogs.content` stores the whole-list Markdown text. It is rendered
+directly beneath the list title. The former PocketBase field name `markdown` is
+not read or written.
+
 `table_catalogs.status` is `draft` or `published`. The collection's list/view rules
 permit published reads and owner reads. Create requires the authenticated user
 id in `owner`; update and delete are restricted to the owner, and update rejects
@@ -57,7 +61,8 @@ owner changes.
 
 The top-level `description` field remains in the record schema and is preserved
 when editing existing lists, but is currently hidden from the UI. The list-level
-Markdown field is labeled “Kuvaus” and appears directly below the list title.
+`content` field is Markdown, labeled “Kuvaus”, and appears directly below the
+list title.
 
 `owner` is included in PocketBase record responses, including public reads of
 published lists. The rules restrict which records can be read; they do not mask

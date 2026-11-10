@@ -121,6 +121,18 @@ suite =
                 Api.listBody "owner-id" { title = "Draft", description = "", markdown = "", items = [], status = Draft }
                     |> Decode.decodeValue (Decode.field "status" Decode.string)
                     |> Expect.equal (Ok "draft")
+        , test "Given whole-list Markdown, when encoded and decoded, then PocketBase uses the content field" <|
+            \_ ->
+                let
+                    body =
+                        Api.listBody "owner-id" { title = "Catalog", description = "", markdown = "## Notes", items = [], status = Draft }
+                in
+                Expect.all
+                    [ \_ -> Decode.decodeValue (Decode.field "content" Decode.string) body |> Expect.equal (Ok "## Notes")
+                    , \_ -> Decode.decodeValue (Decode.field "markdown" Decode.string) body |> Expect.err
+                    , \_ -> Decode.decodeString Api.decodeList "{\"id\":\"list-id\",\"title\":\"Catalog\",\"content\":\"## Notes\",\"status\":\"draft\",\"owner\":\"owner-id\"}" |> Result.map .markdown |> Expect.equal (Ok "## Notes")
+                    ]
+                    ()
         , test "Given safe web and relative Markdown URLs, when checked, then they are retained" <|
             \_ ->
                 Expect.equal

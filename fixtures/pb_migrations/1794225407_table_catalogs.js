@@ -13,7 +13,7 @@ migrate((app) => {
     "fields": [
       { "id": "text_table_catalogs_title", "name": "title", "type": "text", "required": true, "presentable": true, "min": 1, "max": 200 },
       { "id": "text_table_catalogs_description", "name": "description", "type": "text", "max": 2000 },
-      { "id": "text_table_catalogs_markdown", "name": "markdown", "type": "text", "max": 50000 },
+      { "id": "text_table_catalogs_content", "name": "content", "type": "text", "max": 50000 },
       // Each ordered entry stores a title, codes, type, selected services, and
       // optional Markdown description, reference URL, and catalog metadata
       // snapshot (provider, code, name, year, pieces, imageUrl) as JSON.
