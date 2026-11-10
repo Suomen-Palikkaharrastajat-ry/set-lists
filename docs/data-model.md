@@ -1,6 +1,6 @@
 # Set-list data model
 
-`set_lists.items` is an ordered JSON array. Each object has this shape:
+`table_catalogs.items` is an ordered JSON array. Each object has this shape:
 
 ```json
 {
@@ -50,7 +50,7 @@ the decoder so a future service addition does not break existing records. The
 decoder intentionally does not accept the former `{ "code", "services" }`
 format: local development data is replaced as a collection, not migrated.
 
-`set_lists.status` is `draft` or `published`. The collection's list/view rules
+`table_catalogs.status` is `draft` or `published`. The collection's list/view rules
 permit published reads and owner reads. Create requires the authenticated user
 id in `owner`; update and delete are restricted to the owner, and update rejects
 owner changes.

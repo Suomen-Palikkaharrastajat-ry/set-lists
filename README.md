@@ -45,7 +45,7 @@ PocketBase, where member authentication is already configured.
 
 ## PocketBase data and access
 
-The `set_lists` collection stores `title`, `description`, `markdown`, an ordered
+The `table_catalogs` collection stores `title`, `description`, `markdown`, an ordered
 JSON `items` array (`{ title, codes, type, services, description?, url?, catalog? }` per item),
 `status` (`draft` or `published`), and the authenticated PocketBase user id in
 `owner`. `type` is `set`, `altbuild`, or `moc`; set and alternate-build items
@@ -62,8 +62,7 @@ use only the stored snapshot and do not call Rebrickable or Brickset APIs.
 
 The client intentionally decodes only this item shape; it does not migrate old
 `{ code, services }` rows. For development data replacement, back up and replace
-the local `set_lists` collection separately; do not apply an app migration to
-rewrite existing records.
+the local `table_catalogs` collection; the existing dev list data is discarded.
 
 PocketBase rules allow public reads only for published lists; authenticated
 owners can read their drafts and published records and may only update or delete

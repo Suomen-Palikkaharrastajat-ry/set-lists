@@ -208,7 +208,7 @@ fetchLists baseUrl token ownerId page toMsg =
         , headers = [ Http.header "Authorization" token ]
         , url =
             baseUrl
-                ++ "/api/collections/set_lists/records?perPage=200&page="
+                ++ "/api/collections/table_catalogs/records?perPage=200&page="
                 ++ String.fromInt page
                 ++ "&sort=-updated&filter="
                 ++ Url.percentEncode ("owner=\"" ++ ownerId ++ "\"")
@@ -230,7 +230,7 @@ fetchList baseUrl maybeToken id toMsg =
     Http.request
         { method = "GET"
         , headers = maybeToken |> Maybe.map (\token -> [ Http.header "Authorization" token ]) |> Maybe.withDefault []
-        , url = baseUrl ++ "/api/collections/set_lists/records/" ++ Url.percentEncode id
+        , url = baseUrl ++ "/api/collections/table_catalogs/records/" ++ Url.percentEncode id
         , body = Http.emptyBody
         , expect = Http.expectJson toMsg decodeList
         , timeout = Nothing
@@ -333,7 +333,7 @@ saveList baseUrl token owner maybeId form toMsg =
                     "POST"
 
         endpoint =
-            baseUrl ++ "/api/collections/set_lists/records"
+            baseUrl ++ "/api/collections/table_catalogs/records"
 
         url =
             case maybeId of
@@ -359,7 +359,7 @@ deleteList baseUrl token id toMsg =
     Http.request
         { method = "DELETE"
         , headers = [ Http.header "Authorization" token ]
-        , url = baseUrl ++ "/api/collections/set_lists/records/" ++ Url.percentEncode id
+        , url = baseUrl ++ "/api/collections/table_catalogs/records/" ++ Url.percentEncode id
         , body = Http.emptyBody
         , expect = Http.expectWhatever toMsg
         , timeout = Nothing
