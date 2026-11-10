@@ -778,7 +778,7 @@ view model =
         anonymousPublicList =
             isAnonymousPublicList model
     in
-    { title = "Palikkalistat"
+    { title = "Palikkaesitteet"
     , body =
         Layout.view
             { site = model.site
@@ -931,7 +931,7 @@ viewHome model =
     case model.auth of
         NotAuthenticated ->
             section [ class "mx-auto max-w-2xl rounded-lg border border-border-default bg-white p-6 sm:p-10" ]
-                [ h1 [ class "type-h1" ] [ text "Luo ja jaa LEGO-settilistoja" ]
+                [ h1 [ class "type-h1" ] [ text "Luo ja jaa LEGO-pöytäesitteitä" ]
                 , p [ class "type-body mt-4" ] [ text "Kirjaudu sisään luodaksesi omia listoja. Julkaistuja listoja voi tarkastella niiden omalla linkillä." ]
                 , if model.localPasswordAuth then
                     div [ class "mt-6 max-w-md space-y-4" ]
@@ -980,7 +980,7 @@ viewHome model =
                 [ div [ class "mb-6 flex flex-wrap items-center justify-between gap-4" ]
                     [ div []
                         [ h1 [ class "type-h1" ] [ text "Omat listat" ]
-                        , p [ class "type-body mt-2 text-text-muted" ] [ text "Hallinnoi luonnoksia ja jaettuja LEGO-settilistoja." ]
+                        , p [ class "type-body mt-2 text-text-muted" ] [ text "Hallinnoi luonnoksia ja jaettuja LEGO-pöytäesitteitä." ]
                         ]
                     , Button.link { label = "Luo uusi lista", href = "#/lists/new" }
                         |> Button.withVariant Button.Primary

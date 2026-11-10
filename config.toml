@@ -7,8 +7,8 @@ hidden = ["en"]
 
 [site]
 url = "https://listat.palikkaharrastajat.fi"
-title = "Palikkalistat"
-description = "Luo ja jaa LEGO-settilistoja Suomen Palikkaharrastajat ry:n palvelussa."
+title = "Palikkaesitteet"
+description = "Luo ja jaa LEGO-pöytäesitteitä Suomen Palikkaharrastajat ry:n palvelussa."
 
 [site.en]
 title = "LEGO set lists"
@@ -20,7 +20,7 @@ robots = "noindex, nofollow, noarchive"
 [pwa]
 scope = "/"
 orientation = "portrait"
-description = "Luo ja jaa LEGO-settilistoja."
+description = "Luo ja jaa LEGO-pöytäesitteitä."
 
 [pwa.en]
 description = "Create and share LEGO set lists."

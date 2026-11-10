@@ -1,6 +1,6 @@
-# Palikkalistat (Set Lists)
+# Palikkaesitteet (Set Lists)
 
-Palikkalistat is an Elm 0.19 SPA backed by PocketBase. Signed-in members can
+Palikkaesitteet is an Elm 0.19 SPA backed by PocketBase. Signed-in members can
 create, edit, publish, and delete their own set lists. Ordered list items can be
 LEGO sets, alternate builds, or MOCs; each item supports multiple LEGO codes,
 selected LEGO.com/Brickset/BrickLink/Rebrickable links, optional Markdown description, and a
