@@ -1,0 +1,14 @@
+cabal-version: 2.2
+name:          statics
+version:       0.1.0.0
+synopsis:      No-op static generator for the LEGO set list SPA
+description:   This SPA is backed by PocketBase and has no generated static data.
+license:       BSD-2-Clause
+build-type:    Simple
+
+executable statics
+  main-is:          Main.hs
+  hs-source-dirs:   app
+  build-depends:    base >=4.7 && <5
+  default-language: Haskell2010
+  ghc-options:      -Wall

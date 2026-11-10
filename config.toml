@@ -1,0 +1,32 @@
+# Set lists: public LEGO set lists with PocketBase-backed editing.
+
+[i18n]
+default = "fi"
+languages = ["fi", "en"]
+hidden = ["en"]
+
+[site]
+url = "https://listat.palikkaharrastajat.fi"
+title = "Palikkalistat"
+description = "Luo ja jaa LEGO-settilistoja Suomen Palikkaharrastajat ry:n palvelussa."
+
+[site.en]
+title = "LEGO set lists"
+description = "Create and share LEGO set lists with Suomen Palikkaharrastajat ry."
+
+[metadata]
+robots = "noindex, nofollow, noarchive"
+
+[pwa]
+scope = "/"
+orientation = "portrait"
+description = "Luo ja jaa LEGO-settilistoja."
+
+[pwa.en]
+description = "Create and share LEGO set lists."
+
+[navbar]
+variant = "app"
+
+[app]
+pocketbase_url = "https://data.palikkaharrastajat.fi"

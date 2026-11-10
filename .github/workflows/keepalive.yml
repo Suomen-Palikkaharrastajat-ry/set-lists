@@ -1,0 +1,31 @@
+name: Keepalive
+
+# GitHub may disable scheduled workflows in public repositories after 60 days
+# without repository activity. Re-enable the schedule automatically, while
+# respecting workflows that were disabled manually.
+on:
+  schedule:
+    - cron: '17 4 1,15 * *'
+  workflow_dispatch:
+
+permissions:
+  actions: write
+
+jobs:
+  keepalive:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Re-enable scheduled workflows
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          for workflow in scheduled.yml keepalive.yml; do
+            url="repos/${GITHUB_REPOSITORY}/actions/workflows/${workflow}"
+            state="$(gh api "$url" --jq .state)"
+            if [ "$state" = disabled_manually ]; then
+              echo "Skipped $workflow (disabled manually)"
+              continue
+            fi
+            gh api --method PUT "$url/enable"
+            echo "Re-enabled $workflow (was $state)"
+          done

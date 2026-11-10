@@ -1,0 +1,3 @@
+[submodule "vendor/master-builder"]
+	path = vendor/master-builder
+	url = https://github.com/Suomen-Palikkaharrastajat-ry/master-builder

@@ -1,0 +1,48 @@
+@import "tailwindcss";
+@import "../vendor/master-builder/public/fonts/outfit.css";
+@import "./packages/design-tokens/design-tokens.css";
+@import "./packages/ui-components/ui-components.css";
+@source "./src";
+
+@layer base {
+  html, body, #app { min-height: 100%; margin: 0; font-family: var(--font-sans); }
+  button:not([disabled]) { cursor: pointer; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation-duration: 0.01ms !important; transition-duration: 0.01ms !important; }
+}
+
+.markdown-content > :first-child { margin-top: 0; }
+.markdown-content > :last-child { margin-bottom: 0; }
+.anonymous-list .markdown-content { border-top: 0; padding-top: 0; }
+
+@page { size: A4; margin: 16mm; }
+
+.print-only { display: none; }
+
+@media print {
+  header, footer, .no-print { display: none !important; }
+  body, #app { min-height: auto; background: white !important; }
+  .print-list { display: block !important; box-shadow: none !important; border: 0 !important; }
+  .print-list a { color: inherit !important; text-decoration: none !important; }
+  .print-break { break-inside: avoid; }
+
+  body * { visibility: hidden !important; }
+  .print-qr, .print-qr * { visibility: visible !important; }
+  .print-qr {
+    display: flex !important;
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 265mm;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 8mm;
+    margin: 0;
+    background: white;
+  }
+  .print-qr-code svg { width: 90mm !important; height: 90mm !important; display: block; }
+}

@@ -1,0 +1,26 @@
+name: Scheduled availability check
+
+# Set lists are read live from PocketBase, so this checks the deployed static
+# shell rather than rebuilding unchanged generated data.
+
+on:
+  schedule:
+    - cron: '0 0,6,12,18 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pages-scheduled
+  cancel-in-progress: false
+
+jobs:
+  smoke-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check the deployed static shell
+        run: bash scripts/smoke-test.sh
+        env:
+          SITE_URL: https://listat.palikkaharrastajat.fi
