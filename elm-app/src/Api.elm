@@ -1,4 +1,4 @@
-module Api exposing (ListPage, LookupProvider(..), SetLookupResult, decodeList, decodeSetItem, decodeSetLookupResult, deleteList, fetchList, fetchLists, listBody, lookupSet, lookupUrl, saveList, serviceHref)
+module Api exposing (ListPage, LookupProvider(..), SetLookupResult, SetSuggestion, decodeList, decodeSetItem, decodeSetLookupResult, decodeSetSuggestion, deleteList, fetchList, fetchLists, listBody, lookupSet, lookupUrl, saveList, searchSetSuggestions, searchUrl, serviceHref)
 
 {-| PocketBase list API, JSON codecs, and service-specific set search links.
 -}
@@ -32,6 +32,16 @@ type alias SetLookupResult =
     }
 
 
+type alias SetSuggestion =
+    { code : String
+    , name : String
+    , year : Maybe Int
+    , pieces : Maybe Int
+    , imageUrl : Maybe String
+    , sourceUrl : String
+    }
+
+
 decodeSetLookupResult : Decoder SetLookupResult
 decodeSetLookupResult =
     Decode.map5 SetLookupResult
@@ -39,6 +49,17 @@ decodeSetLookupResult =
         (Decode.field "year" (Decode.nullable Decode.int))
         (Decode.field "pieces" (Decode.nullable Decode.int))
         (Decode.field "imageUrl" (Decode.map (Maybe.andThen safeThumbnailUrl) (Decode.nullable Decode.string)))
+        (Decode.field "sourceUrl" Decode.string)
+
+
+decodeSetSuggestion : Decoder SetSuggestion
+decodeSetSuggestion =
+    Decode.map6 SetSuggestion
+        (Decode.field "code" Decode.string)
+        (Decode.field "name" Decode.string)
+        (Decode.field "year" (Decode.nullable Decode.int))
+        (Decode.field "pieces" (Decode.nullable Decode.int))
+        (Decode.field "imageUrl" (Decode.nullable Decode.string |> Decode.map (Maybe.andThen safeThumbnailUrl)))
         (Decode.field "sourceUrl" Decode.string)
 
 
@@ -50,12 +71,23 @@ safeThumbnailUrl url =
                 Url.fromString safeUrl
                     |> Maybe.andThen
                         (\parsed ->
-                            if
-                                parsed.protocol
-                                    == Url.Https
-                                    && List.member (String.toLower parsed.host) [ "cdn.rebrickable.com", "images.brickset.com", "brickset.com", "www.brickset.com" ]
-                                    && (parsed.port_ == Nothing || parsed.port_ == Just 443)
-                            then
+                            let
+                                host =
+                                    String.toLower parsed.host
+
+                                localHost =
+                                    List.member host [ "127.0.0.1", "localhost" ]
+
+                                allowedHost =
+                                    List.member host [ "cdn.rebrickable.com", "images.brickset.com", "brickset.com", "www.brickset.com", "data.palikkaharrastajat.fi" ] || localHost
+
+                                secureProtocol =
+                                    parsed.protocol == Url.Https || (localHost && parsed.protocol == Url.Http)
+
+                                allowedPort =
+                                    parsed.port_ == Nothing || parsed.port_ == Just 443 || (localHost && parsed.port_ == Just 8090)
+                            in
+                            if secureProtocol && allowedHost && allowedPort then
                                 Just safeUrl
 
                             else
@@ -81,6 +113,11 @@ lookupUrl baseUrl provider code =
         ++ lookupProviderName provider
         ++ "&code="
         ++ Url.percentEncode code
+
+
+searchUrl : String -> String -> String
+searchUrl baseUrl query =
+    baseUrl ++ "/api/set-lists/search?q=" ++ Url.percentEncode query
 
 
 decodeList : Decoder ListRecord
@@ -246,6 +283,19 @@ lookupSet baseUrl token provider code toMsg =
         , url = lookupUrl baseUrl provider code
         , body = Http.emptyBody
         , expect = Http.expectJson toMsg decodeSetLookupResult
+        , timeout = Just 8000
+        , tracker = Nothing
+        }
+
+
+searchSetSuggestions : String -> String -> String -> (Result Http.Error (List SetSuggestion) -> msg) -> Cmd msg
+searchSetSuggestions baseUrl token query toMsg =
+    Http.request
+        { method = "GET"
+        , headers = [ Http.header "Authorization" token ]
+        , url = searchUrl baseUrl query
+        , body = Http.emptyBody
+        , expect = Http.expectJson toMsg (Decode.list decodeSetSuggestion)
         , timeout = Just 8000
         , tracker = Nothing
         }

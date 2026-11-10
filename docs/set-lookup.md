@@ -1,27 +1,35 @@
 # Authenticated set metadata lookup
 
-The item editor can request a set's title, year, piece count, and source page
-from Rebrickable or Brickset. The browser sends the user's PocketBase auth token
-to `GET /api/set-lists/lookup?provider=rebrickable|brickset&code=75192-1`.
-PocketBase checks that the token belongs to the `users` auth collection before
-the request reaches either provider. Provider credentials and provider HTTP
-requests stay on the PocketBase server.
+The item editor searches Rebrickable by set name or number and offers up to eight
+suggestions. The browser sends the user's PocketBase auth token to
+`GET /api/set-lists/search?q=millennium%20falcon`. Selecting a result fills the
+item title and code, then requests the matching Brickset metadata from
+`GET /api/set-lists/lookup?provider=brickset&code=75192-1`. PocketBase checks
+that both requests belong to the `users` auth collection before calling a
+provider. Provider credentials and provider HTTP requests stay on PocketBase.
 
-Lookup results remain temporary in the editor until the user chooses
-“Tallenna tiedot”. Acceptance stores the provider, lookup code, name, year,
-piece count, and optional approved HTTPS image URL in the item's existing JSON
-`catalog` field and fills the item title only if it is blank. Editing the first
-valid code clears that snapshot. Public list pages render only persisted
-snapshots and never call either provider API. A rendered thumbnail causes a
-direct browser GET for the image asset from its approved Rebrickable/Brickset
-host; it is not a provider API request. No collection or schema migration is
-required.
+Selecting a suggestion fills the form's title and code and stores its
+Rebrickable metadata snapshot in the form. Brickset metadata enriches that
+snapshot when available. Saving the list persists the selected snapshot in the
+existing JSON `catalog` field. Editing the first valid code clears it. Public
+list pages render only persisted snapshots and never call either provider API.
+
+The app uses the selected Rebrickable suggestion's image URL first. If it has no
+image, it falls back to Brickset's `thumbnailURL`. The authenticated hook proxies
+the approved provider image to the app. The app decodes it, scales it down
+without upscaling so neither dimension exceeds 256 pixels, re-encodes it as
+WebP, and uploads that WebP to the code-keyed `table_thumbnails` PocketBase
+collection. The original provider image is not stored. Public list pages load
+the compact WebP from PocketBase rather than contacting either provider. The
+collection is created by
+`fixtures/pb_migrations/1794268800_table_thumbnails.js`; apply that migration
+before deploying the updated hook.
 
 Lookup codes must use the canonical `digits-variant` form, such as `75192-1`.
 The route returns bounded metadata and an optional HTTPS image URL. Its shared
 PocketBase store caches successful results for 30 minutes and not-found results
 for 5 minutes; the cache is bounded to 200 entries. Each authenticated user is
-limited to 20 requests per rolling minute. Cache hits still count toward this
+limited to 60 requests per rolling minute. Cache hits still count toward this
 per-user limit, but do not consume provider quotas. Rebrickable is limited to at
 most one uncached upstream request per second globally. Brickset has a global
 cap of 80 upstream requests per UTC day, below its default approximate
@@ -31,15 +39,16 @@ quota exhaustion return the same generic `503` response.
 
 ## Install the hook
 
-Copy `fixtures/pb_hooks/set_lookup.pb.js` into the PocketBase instance's
-`pb_hooks` directory (or configure PocketBase to load that directory). The
-development PocketBase process loads `fixtures/pb_hooks` automatically. Keep
-this hook on the server; it is not part of the Elm client or static frontend.
-The triple-slash `types.d.ts` reference at the top is editor-only: relative to a
-deployed `pb_hooks` file it points to the instance's generated
-`pb_data/types.d.ts`. PocketBase ignores the reference at runtime, so it does
-not need to be resolved to load the hook. In this fixture layout, an editor
-looking for that reference expects `fixtures/pb_data/types.d.ts`.
+Copy both `fixtures/pb_hooks/set_lookup.pb.js` and
+`fixtures/pb_hooks/set_lookup_lib.js` into the PocketBase instance's `pb_hooks`
+directory. The route wrappers require the library from inside each handler;
+deploy both files together and ensure there is only one registration for each
+route. The development PocketBase process loads `fixtures/pb_hooks`
+automatically. Keep these files on the server; they are not part of the Elm
+client or static frontend. The triple-slash `types.d.ts` reference is
+editor-only: relative to deployed files in `pb_hooks` it points to the
+instance's generated `pb_data/types.d.ts`. PocketBase ignores the reference at
+runtime.
 
 The observed generic HTTP 400 from the live host was accompanied by PocketBase
 logs showing that the hook loaded from `/workspace/set-lists/pb.js` is different
@@ -56,7 +65,7 @@ lookup-route declarations:
 
 ```sh
 sha256sum /workspace/web/set-lists/fixtures/pb_hooks/set_lookup.pb.js /workspace/set-lists/pb.js
-grep -n 'routerAdd("GET", "/api/set-lists/lookup"' /workspace/set-lists/pb.js
+sha256sum /workspace/web/set-lists/fixtures/pb_hooks/set_lookup_lib.js /workspace/set-lists/set_lookup_lib.js
 grep -R -n 'routerAdd("GET", "/api/set-lists/lookup"' /workspace/set-lists/pb_hooks
 ```
 
@@ -65,8 +74,8 @@ the declaration should occur exactly once across all files PocketBase loads
 (substitute its configured hook directory if it differs from `pb_hooks`). These
 commands only read files and do not restart or modify the host.
 
-No collection migration or additional collection is required. This is a
-standalone PocketBase custom route.
+The search and metadata routes are standalone PocketBase custom routes. The
+`table_thumbnails` file collection is required for PocketBase-hosted thumbnails.
 
 ## Configure provider credentials
 

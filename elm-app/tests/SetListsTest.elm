@@ -108,10 +108,10 @@ suite =
                 Decode.decodeString Api.decodeSetItem "{\"codes\":[\"75192-1\"],\"type\":\"set\",\"services\":[\"rebrickable\",\"unknown\"]}"
                     |> Result.map .services
                     |> Expect.equal (Ok [ Rebrickable ])
-        , test "Given a new item, when created, then all supported services are selected by default" <|
+        , test "Given a new item, when created, then Brickset and Rebrickable are selected by default" <|
             \_ ->
                 Types.emptySetItem.services
-                    |> Expect.equal [ Lego, Brickset, Bricklink, Rebrickable ]
+                    |> Expect.equal [ Brickset, Rebrickable ]
         , test "Given each service, when its label is shown, then it has a human-readable name" <|
             \_ ->
                 List.map Types.serviceName [ Lego, Brickset, Bricklink, Rebrickable ]
@@ -251,6 +251,26 @@ suite =
                     "{\"name\":\"Example\",\"year\":null,\"pieces\":null,\"imageUrl\":\"javascript:alert(1)\",\"sourceUrl\":\"https://brickset.com/sets/75192-1\"}"
                     |> Result.map .imageUrl
                     |> Expect.equal (Ok Nothing)
+        , test "Given a PocketBase-hosted thumbnail, when decoded, then its HTTPS 256px variant is retained" <|
+            \_ ->
+                Decode.decodeString Api.decodeSetLookupResult
+                    "{\"name\":\"Millennium Falcon\",\"year\":2017,\"pieces\":7541,\"imageUrl\":\"https://data.palikkaharrastajat.fi/api/files/table_thumbnails/abc123/set-75192-1.webp\",\"sourceUrl\":\"https://brickset.com/sets/75192-1\"}"
+                    |> Result.map .imageUrl
+                    |> Expect.equal (Ok (Just "https://data.palikkaharrastajat.fi/api/files/table_thumbnails/abc123/set-75192-1.webp"))
+        , test "Given a Rebrickable suggestion, when decoded, then canonical identity and metadata are retained" <|
+            \_ ->
+                Decode.decodeString Api.decodeSetSuggestion
+                    "{\"code\":\"75192-1\",\"name\":\"Millennium Falcon\",\"year\":2017,\"pieces\":7541,\"imageUrl\":null,\"sourceUrl\":\"https://rebrickable.com/sets/75192-1/\"}"
+                    |> Expect.equal
+                        (Ok
+                            { code = "75192-1"
+                            , name = "Millennium Falcon"
+                            , year = Just 2017
+                            , pieces = Just 7541
+                            , imageUrl = Nothing
+                            , sourceUrl = "https://rebrickable.com/sets/75192-1/"
+                            }
+                        )
         , test "Given an accepted catalog snapshot, when encoded and decoded, then only its persisted fields are retained" <|
             \_ ->
                 let
@@ -345,9 +365,11 @@ suite =
                 Expect.equal
                     [ "https://pb.example/api/set-lists/lookup?provider=rebrickable&code=75192-1"
                     , "https://pb.example/api/set-lists/lookup?provider=brickset&code=75192-1"
+                    , "https://pb.example/api/set-lists/search?q=Millennium%20Falcon"
                     ]
                     [ Api.lookupUrl "https://pb.example" Api.RebrickableProvider "75192-1"
                     , Api.lookupUrl "https://pb.example" Api.BricksetProvider "75192-1"
+                    , Api.searchUrl "https://pb.example" "Millennium Falcon"
                     ]
         , test "Given malformed and canonical set codes, when checking lookup eligibility, then only canonical codes pass" <|
             \_ ->

@@ -9,12 +9,11 @@ Markdown toolbar and preview. A published list is available at `/#/[id]` and
 includes an A4 print view with a QR code to
 `https://listat.palikkaharrastajat.fi/#/[id]`.
 
-Signed-in editors can optionally look up set metadata from Rebrickable or
-Brickset and accept a snapshot into the item. Public list pages render accepted
-snapshots without provider API requests (an optional saved thumbnail is a direct
-image-asset GET). The PocketBase hook, server-side credential setup, and install
-steps are documented in [docs/set-lookup.md](docs/set-lookup.md). No collection
-migration is needed.
+Signed-in editors can search Rebrickable for a set, then automatically enrich
+the selected item with Brickset metadata and a PocketBase-hosted thumbnail.
+Public list pages render saved snapshots without provider API requests. Hook,
+credential, thumbnail migration, and install details are in
+[docs/set-lookup.md](docs/set-lookup.md).
 
 ## Development
 

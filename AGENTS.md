@@ -45,16 +45,17 @@ publish their ports; keep those bind addresses when changing their commands.
 - Markdown links and images must continue to use `MarkdownSafety.safeUrl`.
 - Item reference URLs must use `MarkdownSafety.safeWebUrl`. Do not add a legacy
   item decoder or a PocketBase migration for replacing development data.
-- Set metadata lookup is an authenticated PocketBase route restricted to the
+- Set search and metadata lookup are authenticated PocketBase routes restricted to the
   `users` auth collection. Keep provider credentials server-side; never add them
   to Elm, browser JavaScript, Vite environment variables, `dist/`, or examples.
-  There is no collection migration for this route. Local PocketBase loads
-  `fixtures/pb_hooks/`; do not enable that fixture hook directory in production.
-- Lookup results are persisted only after editor acceptance in each item's
-  optional `catalog` JSON snapshot. Public list routes must render that stored
-  snapshot without provider API requests. If its approved HTTPS thumbnail is
-  rendered, note that the browser makes a direct image-asset GET to the provider
-  image host. See `docs/set-lookup.md` for deployed-hook troubleshooting.
+  Local PocketBase loads `fixtures/pb_hooks/`; do not enable that fixture hook
+  directory in production. Apply the `table_thumbnails` migration before deploying
+  the updated production hook.
+- Selected set data is stored in each item's optional `catalog` JSON snapshot.
+  Brickset thumbnails are app-encoded WebP files no larger than 256px and are
+  cached in PocketBase;
+  public list routes must render saved snapshots without provider API requests.
+  See `docs/set-lookup.md` for deployed-hook troubleshooting.
 - Keep `robots.txt` disallowing all crawlers and the document metadata noindex.
 - Apply the PocketBase migration before using a fresh local instance. Local
   development uses password login against loopback PocketBase and requires a

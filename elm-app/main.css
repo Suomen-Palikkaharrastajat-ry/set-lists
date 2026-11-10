@@ -15,6 +15,9 @@
 
 .markdown-content > :first-child { margin-top: 0; }
 .markdown-content > :last-child { margin-bottom: 0; }
+.markdown-content ul { list-style: none; padding-inline-start: 1.25em; }
+.markdown-content ul > li { position: relative; }
+.markdown-content ul > li::before { content: "–"; position: absolute; inset-inline-start: -1.25em; }
 .anonymous-list .markdown-content { border-top: 0; padding-top: 0; }
 
 @page { size: A4; margin: 16mm; }

@@ -8,6 +8,7 @@ i18n-exempt: Initial release exposes Finnish UI only; English is hidden in site 
 
 import Api
 import Browser
+import Browser.Dom as Dom
 import Browser.Navigation as Nav
 import Component.Account as Account
 import Component.Button as Button
@@ -17,8 +18,8 @@ import Component.Layout as Layout
 import Component.Toast as Toast
 import Dict exposing (Dict)
 import FeatherIcons
-import Html exposing (Html, a, div, fieldset, h1, h2, h3, header, img, input, label, main_, p, section, span, text, textarea)
-import Html.Attributes exposing (alt, attribute, checked, class, href, placeholder, src, target, type_, value)
+import Html exposing (Html, a, button, div, fieldset, h1, h2, h3, header, img, input, label, li, main_, p, section, span, text, textarea, ul)
+import Html.Attributes exposing (alt, attribute, checked, class, disabled, href, id, placeholder, src, target, type_, value)
 import Html.Events exposing (onCheck, onClick, onInput)
 import Http
 import Json.Decode as Decode
@@ -31,6 +32,7 @@ import QRCode
 import Route
 import SiteSettings exposing (SiteSettings)
 import Svg.Attributes as SvgA
+import Task
 import Types exposing (ItemKind(..), ListForm, ListRecord, ListStatus(..), Service(..), SetItem)
 import UiStrings
 import Url exposing (Url)
@@ -57,7 +59,12 @@ type alias Model =
     , accumulatedLists : List ListRecord
     , currentList : LoadState ListRecord
     , form : ListForm
-    , setLookups : Dict Int SetLookupState
+    , setSearchQueries : Dict Int String
+    , setSearchStates : Dict Int SetSearchState
+    , searchRequestId : Int
+    , codeDrafts : Dict Int String
+    , openSetIndex : Maybe Int
+    , editorTab : EditorTab
     , lookupRequestId : Int
     , markdownPreviewIds : List String
     , saving : Bool
@@ -87,10 +94,36 @@ type LoadState a
     | LoadFailed String
 
 
-type SetLookupState
-    = LookupLoading Int Api.LookupProvider String
-    | LookupLoaded Int Api.LookupProvider String Api.SetLookupResult
-    | LookupFailed Int Api.LookupProvider String String
+type EditorTab
+    = ItemsTab
+    | DescriptionTab
+
+
+type SetSearchState
+    = SetSearchWaiting Int String
+    | SetSearchLoading Int String
+    | SetSearchResults Int String (List Api.SetSuggestion)
+    | SetSearchFailed Int String String
+    | SetSearchEnriching Int String (Maybe String)
+    | SetSearchEnriched Int String Bool Bool
+    | SetSearchEnrichmentFailed Int String
+    | SetSearchSavingThumbnail Int String Bool
+    | SetSearchCodeAdded String
+
+
+type alias SetSearchPayload =
+    { index : Int
+    , query : String
+    , requestId : Int
+    }
+
+
+type alias SetThumbnailProcessed =
+    { index : Int
+    , requestId : Int
+    , code : String
+    , imageUrl : Maybe String
+    }
 
 
 type alias LocalPasswordLoginResult =
@@ -114,11 +147,16 @@ type Msg
     | ListLoaded String (Result Http.Error ListRecord)
     | TitleChanged String
     | MarkdownChanged String
+    | SetSearchChanged Int String
+    | CodeDraftChanged Int String
+    | AddManualCode Int
+    | RemoveItemCode Int String
+    | SetSearchReady SetSearchPayload
+    | SetSearchCompleted Int Int String (Result Http.Error (List Api.SetSuggestion))
+    | SetSuggestionSelected Int Int Api.SetSuggestion
+    | SetSuggestionEnriched Int Int String (Result Http.Error Api.SetLookupResult)
+    | SetSuggestionThumbnailProcessed SetThumbnailProcessed
     | ItemTitleChanged Int String
-    | ItemCodesChanged Int String
-    | SetLookupClicked Int Api.LookupProvider
-    | SetLookupCompleted Int Int Api.LookupProvider String (Result Http.Error Api.SetLookupResult)
-    | AcceptLookup Int Int String
     | ItemKindChanged Int String
     | ItemDescriptionChanged Int String
     | ItemUrlChanged Int String
@@ -128,7 +166,9 @@ type Msg
     | CloseMenu
     | NoOp
     | StatusChanged String
+    | SelectEditorTab EditorTab
     | ToggleService Int Service Bool
+    | ToggleSetAccordion Int
     | AddSet
     | RemoveSet Int
     | MoveSet Int Int
@@ -167,6 +207,18 @@ port printDocument : () -> Cmd msg
 
 
 port applyMarkdownFormatting : { id : String, prefix : String, suffix : String, linePrefix : String } -> Cmd msg
+
+
+port scheduleSetSearch : SetSearchPayload -> Cmd msg
+
+
+port setSearchReady : (SetSearchPayload -> msg) -> Sub msg
+
+
+port processSetThumbnail : { index : Int, requestId : Int, code : String, imageUrl : String, pbBaseUrl : String, token : String } -> Cmd msg
+
+
+port setThumbnailProcessed : (SetThumbnailProcessed -> msg) -> Sub msg
 
 
 main : Program Flags Model Msg
@@ -213,7 +265,12 @@ init flags url key =
       , accumulatedLists = []
       , currentList = loaded.currentList
       , form = loaded.form
-      , setLookups = Dict.empty
+      , setSearchQueries = Dict.empty
+      , setSearchStates = Dict.empty
+      , searchRequestId = 0
+      , codeDrafts = Dict.empty
+      , openSetIndex = initialOpenSet loaded.form.items
+      , editorTab = ItemsTab
       , lookupRequestId = 0
       , markdownPreviewIds = []
       , saving = False
@@ -271,6 +328,8 @@ subscriptions model =
     Sub.batch
         [ oauthPopupResult OAuthPopupResult
         , localPasswordLoginResult LocalPasswordLoginCompleted
+        , setSearchReady SetSearchReady
+        , setThumbnailProcessed SetSuggestionThumbnailProcessed
         , Layout.subscriptions { isOpen = model.menuOpen, onClose = CloseMenu }
         ]
 
@@ -298,12 +357,12 @@ update msg model =
                     requiresAuth route && getToken model.auth == Nothing
             in
             if isProtected then
-                ( { model | url = url, route = Route.Home, ownedLists = NotLoaded, accumulatedLists = [], currentList = NotLoaded, setLookups = Dict.empty, confirmDelete = False, menuOpen = False }
+                ( { model | url = url, route = Route.Home, ownedLists = NotLoaded, accumulatedLists = [], currentList = NotLoaded, setSearchQueries = Dict.empty, setSearchStates = Dict.empty, codeDrafts = Dict.empty, openSetIndex = Nothing, editorTab = ItemsTab, confirmDelete = False, menuOpen = False }
                 , Nav.pushUrl model.key "#/"
                 )
 
             else
-                ( { model | url = url, route = route, ownedLists = loaded.ownedLists, accumulatedLists = [], currentList = loaded.currentList, form = loaded.form, setLookups = Dict.empty, confirmDelete = False, menuOpen = False }
+                ( { model | url = url, route = route, ownedLists = loaded.ownedLists, accumulatedLists = [], currentList = loaded.currentList, form = loaded.form, setSearchQueries = Dict.empty, setSearchStates = Dict.empty, codeDrafts = Dict.empty, openSetIndex = initialOpenSet loaded.form.items, editorTab = ItemsTab, confirmDelete = False, menuOpen = False }
                 , Cmd.batch
                     [ loaded.cmd
                     , if model.menuOpen then
@@ -349,7 +408,7 @@ update msg model =
             finishLogin data model
 
         LogOut ->
-            ( { model | auth = NotAuthenticated, ownedLists = NotLoaded, setLookups = Dict.empty, notice = Nothing }
+            ( { model | auth = NotAuthenticated, ownedLists = NotLoaded, notice = Nothing }
             , Cmd.batch [ clearAuthToken (), Nav.pushUrl model.key "#/" ]
             )
 
@@ -402,7 +461,19 @@ update msg model =
                                     , status = record.status
                                     }
                             in
-                            ( { model | currentList = Loaded record, form = form }, Cmd.none )
+                            ( { model
+                                | currentList = Loaded record
+                                , form = form
+                                , openSetIndex =
+                                    case model.route of
+                                        Route.EditList _ ->
+                                            initialOpenSet record.items
+
+                                        _ ->
+                                            Nothing
+                              }
+                            , Cmd.none
+                            )
 
                     Err error ->
                         ( { model | currentList = LoadFailed (httpError error) }, Cmd.none )
@@ -416,102 +487,351 @@ update msg model =
         MarkdownChanged markdown ->
             ( mapForm (\form -> { form | markdown = markdown }) model, Cmd.none )
 
-        ItemTitleChanged index title ->
-            ( mapForm (\form -> { form | items = updateAt index (\item -> { item | title = title }) form.items }) model, Cmd.none )
-
-        ItemCodesChanged index codes ->
+        SetSearchChanged index query ->
             let
+                requestId =
+                    model.searchRequestId + 1
+
+                trimmedQuery =
+                    String.trim query
+
                 updated =
-                    mapForm (\form -> { form | items = updateAt index (Types.setItemCodesText codes) form.items }) model
+                    { model
+                        | setSearchQueries = Dict.insert index query model.setSearchQueries
+                        , searchRequestId = requestId
+                    }
             in
-            ( { updated | setLookups = Dict.remove index model.setLookups }, Cmd.none )
+            if String.length trimmedQuery < 2 then
+                ( { updated | setSearchStates = Dict.remove index model.setSearchStates }, Cmd.none )
 
-        SetLookupClicked index provider ->
-            case ( getToken model.auth, List.drop index model.form.items |> List.head |> Maybe.andThen Types.firstLookupCode ) of
-                ( Just token, Just code ) ->
-                    let
-                        requestId =
-                            model.lookupRequestId + 1
-                    in
-                    ( { model | lookupRequestId = requestId, setLookups = Dict.insert index (LookupLoading requestId provider code) model.setLookups }
-                    , Api.lookupSet model.pbBaseUrl token provider code (SetLookupCompleted index requestId provider code)
-                    )
+            else
+                let
+                    payload =
+                        { index = index, query = trimmedQuery, requestId = requestId }
+                in
+                ( { updated | setSearchStates = Dict.insert index (SetSearchWaiting requestId trimmedQuery) model.setSearchStates }
+                , scheduleSetSearch payload
+                )
 
-                ( _, Nothing ) ->
+        SetSearchReady payload ->
+            case Dict.get payload.index model.setSearchStates of
+                Just (SetSearchWaiting activeId activeQuery) ->
+                    if activeId /= payload.requestId || activeQuery /= payload.query then
+                        ( model, Cmd.none )
+
+                    else
+                        case getToken model.auth of
+                            Just token ->
+                                ( { model | setSearchStates = Dict.insert payload.index (SetSearchLoading activeId activeQuery) model.setSearchStates }
+                                , Api.searchSetSuggestions model.pbBaseUrl token activeQuery (SetSearchCompleted payload.index activeId activeQuery)
+                                )
+
+                            Nothing ->
+                                ( { model | setSearchStates = Dict.insert payload.index (SetSearchFailed activeId activeQuery "Kirjaudu sisään käyttääksesi hakua.") model.setSearchStates }
+                                , Cmd.none
+                                )
+
+                _ ->
                     ( model, Cmd.none )
 
-                ( Nothing, Just _ ) ->
-                    ( { model | setLookups = Dict.insert index (LookupFailed model.lookupRequestId provider "" "Kirjaudu sisään käyttääksesi hakua.") model.setLookups }, Cmd.none )
+        SetSearchCompleted index requestId query result ->
+            case Dict.get index model.setSearchStates of
+                Just (SetSearchLoading activeId activeQuery) ->
+                    if activeId /= requestId || activeQuery /= query then
+                        ( model, Cmd.none )
 
-        SetLookupCompleted index requestId provider code result ->
+                    else
+                        case result of
+                            Ok suggestions ->
+                                ( { model | setSearchStates = Dict.insert index (SetSearchResults requestId query suggestions) model.setSearchStates }
+                                , Cmd.none
+                                )
+
+                            Err error ->
+                                ( { model | setSearchStates = Dict.insert index (SetSearchFailed requestId query ("Settien haku ei onnistunut (" ++ httpError error ++ ").")) model.setSearchStates }
+                                , Cmd.none
+                                )
+
+                _ ->
+                    ( model, Cmd.none )
+
+        SetSuggestionSelected index requestId suggestion ->
             let
-                matchesPending =
-                    case Dict.get index model.setLookups of
-                        Just (LookupLoading activeId activeProvider activeCode) ->
-                            activeId == requestId && activeProvider == provider && activeCode == code
+                isCurrentSuggestion =
+                    case Dict.get index model.setSearchStates of
+                        Just (SetSearchResults activeId _ suggestions) ->
+                            activeId == requestId && List.any (.code >> (==) suggestion.code) suggestions
 
                         _ ->
                             False
 
-                matchesCurrentItem =
-                    List.drop index model.form.items
-                        |> List.head
-                        |> Maybe.map (Types.lookupCodeMatches code)
-                        |> Maybe.withDefault False
+                maybeCurrentItem =
+                    List.drop index model.form.items |> List.head
             in
-            if not matchesPending || not matchesCurrentItem then
+            if not isCurrentSuggestion || not (Types.validSetCode suggestion.code) then
                 ( model, Cmd.none )
 
             else
-                case result of
-                    Ok lookupResult ->
-                        ( { model | setLookups = Dict.insert index (LookupLoaded requestId provider code lookupResult) model.setLookups }, Cmd.none )
+                let
+                    codeAlreadyPresent =
+                        maybeCurrentItem |> Maybe.map (.codes >> List.member suggestion.code) |> Maybe.withDefault False
 
-                    Err (Http.BadStatus 404) ->
-                        ( { model | setLookups = Dict.insert index (LookupFailed requestId provider code "Settiä ei löytynyt. Voit syöttää otsikon itse.") model.setLookups }, Cmd.none )
+                    needsMetadataLookup =
+                        not codeAlreadyPresent
+                            && (maybeCurrentItem |> Maybe.andThen Types.firstLookupCode |> Maybe.withDefault "")
+                            == ""
 
-                    Err error ->
+                    itemWithSuggestion item =
                         let
-                            message =
-                                "Haku ei onnistunut (" ++ httpError error ++ "). Voit syöttää otsikon itse."
+                            selectedItem =
+                                if List.member suggestion.code item.codes then
+                                    item
+
+                                else
+                                    let
+                                        codes =
+                                            item.codes ++ [ suggestion.code ]
+                                    in
+                                    { item
+                                        | title = Types.fillTitleFromLookup item.title suggestion.name
+                                        , codes = codes
+                                        , codesText = String.join "\n" codes
+                                    }
                         in
-                        ( { model | setLookups = Dict.insert index (LookupFailed requestId provider code message) model.setLookups }, Cmd.none )
+                        if needsMetadataLookup then
+                            Types.acceptCatalog
+                                { provider = Types.RebrickableCatalog
+                                , code = suggestion.code
+                                , name = suggestion.name
+                                , year = suggestion.year
+                                , pieces = suggestion.pieces
+                                , imageUrl = Nothing
+                                }
+                                selectedItem
 
-        AcceptLookup index requestId code ->
-            let
-                acceptedResult =
-                    case Dict.get index model.setLookups of
-                        Just (LookupLoaded activeId provider activeCode result) ->
-                            if activeId == requestId && activeCode == code then
-                                Just ( provider, result )
+                        else
+                            selectedItem
 
-                            else
-                                Nothing
+                    updated =
+                        mapForm (\form -> { form | items = updateAt index itemWithSuggestion form.items }) model
 
-                        _ ->
-                            Nothing
+                    enrichmentRequestId =
+                        model.lookupRequestId + 1
 
-                updateItem ( provider, result ) item =
-                    Types.acceptCatalog
-                        { provider = catalogProvider provider
-                        , code = code
-                        , name = result.name
-                        , year = result.year
-                        , pieces = result.pieces
-                        , imageUrl = result.imageUrl
+                    updatedWithSearch =
+                        { updated
+                            | setSearchQueries = Dict.insert index "" model.setSearchQueries
+                            , setSearchStates =
+                                if codeAlreadyPresent then
+                                    Dict.insert index (SetSearchCodeAdded "Tunnus on jo listassa.") model.setSearchStates
+
+                                else if needsMetadataLookup then
+                                    Dict.insert index (SetSearchEnriching enrichmentRequestId suggestion.code suggestion.imageUrl) model.setSearchStates
+
+                                else
+                                    Dict.insert index (SetSearchCodeAdded "Tunnus lisättiin listaan.") model.setSearchStates
                         }
-                        item
-            in
-            case acceptedResult of
-                Just snapshot ->
-                    if List.drop index model.form.items |> List.head |> Maybe.map (Types.lookupCodeMatches code) |> Maybe.withDefault False then
-                        ( mapForm (\form -> { form | items = updateAt index (updateItem snapshot) form.items }) model, Cmd.none )
+                in
+                if not needsMetadataLookup then
+                    ( updatedWithSearch, Task.attempt (\_ -> NoOp) (Dom.focus ("item-search-" ++ String.fromInt index)) )
+
+                else
+                    case getToken model.auth of
+                        Just token ->
+                            ( { updatedWithSearch | lookupRequestId = enrichmentRequestId, setSearchStates = Dict.insert index (SetSearchEnriching enrichmentRequestId suggestion.code suggestion.imageUrl) updatedWithSearch.setSearchStates }
+                            , Cmd.batch
+                                [ Api.lookupSet model.pbBaseUrl token Api.BricksetProvider suggestion.code (SetSuggestionEnriched index enrichmentRequestId suggestion.code)
+                                , Task.attempt (\_ -> NoOp) (Dom.focus ("item-search-" ++ String.fromInt index))
+                                ]
+                            )
+
+                        Nothing ->
+                            ( { updatedWithSearch | lookupRequestId = enrichmentRequestId, setSearchStates = Dict.insert index (SetSearchEnrichmentFailed enrichmentRequestId suggestion.code) updatedWithSearch.setSearchStates }
+                            , Task.attempt (\_ -> NoOp) (Dom.focus ("item-search-" ++ String.fromInt index))
+                            )
+
+        SetSuggestionEnriched index requestId code result ->
+            case Dict.get index model.setSearchStates of
+                Just (SetSearchEnriching activeId activeCode rebrickableImageUrl) ->
+                    if activeId /= requestId || activeCode /= code then
+                        ( model, Cmd.none )
 
                     else
+                        case result of
+                            Ok lookupResult ->
+                                let
+                                    updatedForm =
+                                        model.form
+
+                                    bricksetCatalog =
+                                        { provider = Types.BricksetCatalog
+                                        , code = code
+                                        , name = lookupResult.name
+                                        , year = lookupResult.year
+                                        , pieces = lookupResult.pieces
+                                        , imageUrl = Nothing
+                                        }
+
+                                    updated =
+                                        { model
+                                            | form = { updatedForm | items = updateAt index (Types.acceptCatalog bricksetCatalog) updatedForm.items }
+                                        }
+
+                                    imageSource =
+                                        case rebrickableImageUrl of
+                                            Just url ->
+                                                Just url
+
+                                            Nothing ->
+                                                lookupResult.imageUrl
+                                in
+                                case ( imageSource, getToken model.auth ) of
+                                    ( Just sourceUrl, Just token ) ->
+                                        ( { updated | setSearchStates = Dict.insert index (SetSearchSavingThumbnail requestId code True) model.setSearchStates }
+                                        , processSetThumbnail
+                                            { index = index
+                                            , requestId = requestId
+                                            , code = code
+                                            , imageUrl = sourceUrl
+                                            , pbBaseUrl = model.pbBaseUrl
+                                            , token = token
+                                            }
+                                        )
+
+                                    _ ->
+                                        ( { updated | setSearchStates = Dict.insert index (SetSearchEnriched requestId code True False) model.setSearchStates }
+                                        , Cmd.none
+                                        )
+
+                            Err _ ->
+                                case ( rebrickableImageUrl, getToken model.auth ) of
+                                    ( Just sourceUrl, Just token ) ->
+                                        ( { model | setSearchStates = Dict.insert index (SetSearchSavingThumbnail requestId code False) model.setSearchStates }
+                                        , processSetThumbnail
+                                            { index = index
+                                            , requestId = requestId
+                                            , code = code
+                                            , imageUrl = sourceUrl
+                                            , pbBaseUrl = model.pbBaseUrl
+                                            , token = token
+                                            }
+                                        )
+
+                                    _ ->
+                                        ( { model | setSearchStates = Dict.insert index (SetSearchEnrichmentFailed requestId code) model.setSearchStates }
+                                        , Cmd.none
+                                        )
+
+                _ ->
+                    ( model, Cmd.none )
+
+        SetSuggestionThumbnailProcessed processed ->
+            case Dict.get processed.index model.setSearchStates of
+                Just (SetSearchSavingThumbnail activeId activeCode hasBricksetMetadata) ->
+                    if activeId /= processed.requestId || activeCode /= processed.code then
                         ( model, Cmd.none )
+
+                    else if not (List.drop processed.index model.form.items |> List.head |> Maybe.map (Types.lookupCodeMatches processed.code) |> Maybe.withDefault False) then
+                        ( model, Cmd.none )
+
+                    else
+                        case processed.imageUrl of
+                            Just imageUrl ->
+                                let
+                                    currentForm =
+                                        model.form
+
+                                    attachThumbnail item =
+                                        case item.catalog of
+                                            Just catalog ->
+                                                if catalog.code == processed.code then
+                                                    { item | catalog = Just { catalog | imageUrl = Just imageUrl } }
+
+                                                else
+                                                    item
+
+                                            Nothing ->
+                                                item
+                                in
+                                ( { model
+                                    | form = { currentForm | items = updateAt processed.index attachThumbnail currentForm.items }
+                                    , setSearchStates = Dict.insert processed.index (SetSearchEnriched processed.requestId processed.code hasBricksetMetadata True) model.setSearchStates
+                                  }
+                                , Cmd.none
+                                )
+
+                            Nothing ->
+                                ( { model | setSearchStates = Dict.insert processed.index (SetSearchEnriched processed.requestId processed.code hasBricksetMetadata False) model.setSearchStates }
+                                , Cmd.none
+                                )
+
+                _ ->
+                    ( model, Cmd.none )
+
+        ItemTitleChanged index title ->
+            ( mapForm (\form -> { form | items = updateAt index (\item -> { item | title = title }) form.items }) model, Cmd.none )
+
+        CodeDraftChanged index code ->
+            ( { model | codeDrafts = Dict.insert index code model.codeDrafts }, Cmd.none )
+
+        AddManualCode index ->
+            let
+                code =
+                    Dict.get index model.codeDrafts |> Maybe.withDefault "" |> String.trim
+
+                currentItem =
+                    List.drop index model.form.items |> List.head
+            in
+            case currentItem of
+                Just item ->
+                    if code == "" || List.member code item.codes then
+                        ( { model | codeDrafts = Dict.insert index "" model.codeDrafts }, Cmd.none )
+
+                    else
+                        let
+                            updated =
+                                mapForm
+                                    (\form ->
+                                        { form
+                                            | items =
+                                                updateAt index
+                                                    (\current -> Types.setItemCodesText (String.join "\n" (current.codes ++ [ code ])) current)
+                                                    form.items
+                                        }
+                                    )
+                                    model
+                        in
+                        ( { updated
+                            | codeDrafts = Dict.insert index "" updated.codeDrafts
+                            , setSearchQueries = Dict.insert index "" updated.setSearchQueries
+                            , setSearchStates = Dict.remove index updated.setSearchStates
+                          }
+                        , Cmd.none
+                        )
 
                 Nothing ->
                     ( model, Cmd.none )
+
+        RemoveItemCode index code ->
+            let
+                updated =
+                    mapForm
+                        (\form ->
+                            { form
+                                | items =
+                                    updateAt index
+                                        (\item -> Types.setItemCodesText (item.codes |> List.filter ((/=) code) |> String.join "\n") item)
+                                        form.items
+                            }
+                        )
+                        model
+            in
+            ( { updated
+                | setSearchQueries = Dict.insert index "" updated.setSearchQueries
+                , setSearchStates = Dict.remove index updated.setSearchStates
+              }
+            , Cmd.none
+            )
 
         ItemKindChanged index kind ->
             ( mapForm (\form -> { form | items = updateAt index (\item -> { item | kind = Types.itemKindFromString kind }) form.items }) model, Cmd.none )
@@ -566,6 +886,9 @@ update msg model =
             , Cmd.none
             )
 
+        SelectEditorTab tab ->
+            ( { model | editorTab = tab }, Cmd.none )
+
         ToggleService index service enabled ->
             let
                 toggle item =
@@ -585,21 +908,65 @@ update msg model =
             in
             ( mapForm (\form -> { form | items = updateAt index toggle form.items }) model, Cmd.none )
 
+        ToggleSetAccordion index ->
+            ( { model
+                | openSetIndex =
+                    if model.openSetIndex == Just index then
+                        Nothing
+
+                    else
+                        Just index
+              }
+            , Cmd.none
+            )
+
         AddSet ->
             let
+                newIndex =
+                    List.length model.form.items
+
                 updated =
                     mapForm (\form -> { form | items = form.items ++ [ Types.emptySetItem ] }) model
             in
-            ( { updated | setLookups = Dict.empty }, Cmd.none )
+            ( { updated
+                | setSearchQueries = Dict.insert newIndex "" model.setSearchQueries
+                , setSearchStates = Dict.remove newIndex model.setSearchStates
+                , codeDrafts = Dict.insert newIndex "" model.codeDrafts
+                , openSetIndex = Just newIndex
+                , editorTab = ItemsTab
+              }
+            , Task.attempt (\_ -> NoOp) (Dom.focus ("item-search-" ++ String.fromInt newIndex))
+            )
 
         RemoveSet index ->
             let
+                remainingItems =
+                    List.indexedMap Tuple.pair model.form.items
+                        |> List.filter (Tuple.first >> (/=) index)
+                        |> List.map Tuple.second
+
                 updated =
-                    mapForm
-                        (\form -> { form | items = List.indexedMap Tuple.pair form.items |> List.filter (Tuple.first >> (/=) index) |> List.map Tuple.second })
-                        model
+                    mapForm (\form -> { form | items = remainingItems }) model
+
+                nextOpenIndex =
+                    case model.openSetIndex of
+                        Nothing ->
+                            Nothing
+
+                        Just openIndex ->
+                            if List.isEmpty remainingItems then
+                                Nothing
+
+                            else if openIndex == index then
+                                Just (min index (List.length remainingItems - 1))
+
+                            else if openIndex > index then
+                                Just (openIndex - 1)
+
+                            else
+                                Just openIndex
             in
-            ( { updated | setLookups = Dict.empty }
+            ( { updated | setSearchQueries = Dict.empty, setSearchStates = Dict.empty, codeDrafts = Dict.empty, openSetIndex = nextOpenIndex }
             , Cmd.none
             )
 
@@ -608,7 +975,7 @@ update msg model =
                 updated =
                     mapForm (\form -> { form | items = moveItem from to form.items }) model
             in
-            ( { updated | setLookups = Dict.empty }, Cmd.none )
+            ( { updated | setSearchQueries = Dict.empty, setSearchStates = Dict.empty, codeDrafts = Dict.empty, openSetIndex = moveOpenSetIndex from to model.openSetIndex }, Cmd.none )
 
         SaveClicked ->
             case ( getToken model.auth, model.auth, model.route ) of
@@ -755,6 +1122,34 @@ moveItem from to values =
 clamp : Int -> Int -> Int -> Int
 clamp low high value =
     max low (min high value)
+
+
+initialOpenSet : List SetItem -> Maybe Int
+initialOpenSet items =
+    if List.isEmpty items then
+        Nothing
+
+    else
+        Just 0
+
+
+moveOpenSetIndex : Int -> Int -> Maybe Int -> Maybe Int
+moveOpenSetIndex from to maybeOpenIndex =
+    Maybe.map
+        (\openIndex ->
+            if openIndex == from then
+                to
+
+            else if from < to && openIndex > from && openIndex <= to then
+                openIndex - 1
+
+            else if to < from && openIndex >= to && openIndex < from then
+                openIndex + 1
+
+            else
+                openIndex
+        )
+        maybeOpenIndex
 
 
 mapForm : (ListForm -> ListForm) -> Model -> Model
@@ -1152,7 +1547,7 @@ viewListDetail authenticated owned record =
 
 viewSet : Int -> SetItem -> Html Msg
 viewSet index item =
-    section [ class "print-break flex flex-wrap items-start gap-4 py-4" ]
+    section [ class "print-break flex flex-wrap items-baseline gap-4 py-4" ]
         [ span [ class "type-mono text-text-muted" ] [ text (String.fromInt (index + 1) ++ ".") ]
         , div [ class "min-w-0 flex-1" ]
             [ div [ class "flex flex-wrap items-baseline gap-3" ]
@@ -1165,7 +1560,6 @@ viewSet index item =
                             item.title
                         )
                     ]
-                , span [ class "rounded bg-bg-subtle px-2 py-1 type-caption text-text-muted" ] [ text (itemKindName item.kind) ]
                 , case MarkdownSafety.safeWebUrl item.url of
                     Just safeUrl ->
                         a [ href safeUrl, target "_blank", attribute "rel" "noopener noreferrer", class "text-brand underline" ] [ text "Lisätietoja" ]
@@ -1173,13 +1567,13 @@ viewSet index item =
                     Nothing ->
                         text ""
                 ]
-            , viewCatalogSnapshot item.catalog
+            , viewItemMarkdown item.description
+            , viewCatalogThumbnail item.catalog
             , if List.isEmpty item.codes then
                 p [ class "mt-2 type-caption text-text-muted" ] [ text "Ei LEGO-tunnuksia" ]
 
               else
                 div [ class "mt-3 space-y-3" ] (List.map (viewCodeLinks item.services) item.codes)
-            , viewMarkdown item.description
             ]
         ]
 
@@ -1191,7 +1585,7 @@ viewCatalogSnapshot maybeCatalog =
             div [ class "mt-2 flex flex-wrap items-center gap-3 type-caption text-text-muted" ]
                 ((case catalog.imageUrl of
                     Just imageUrl ->
-                        [ img [ src imageUrl, alt (catalog.name ++ " - " ++ lookupProviderLabel (lookupProvider catalog.provider)), attribute "loading" "lazy", attribute "referrerpolicy" "no-referrer", class "h-16 w-16 rounded object-contain" ] [] ]
+                        [ img [ src imageUrl, alt (catalog.name ++ " - " ++ catalogProviderName catalog.provider), attribute "loading" "lazy", attribute "referrerpolicy" "no-referrer", class "h-16 w-16 rounded object-contain" ] [] ]
 
                     Nothing ->
                         []
@@ -1203,31 +1597,40 @@ viewCatalogSnapshot maybeCatalog =
             text ""
 
 
+viewCatalogThumbnail : Maybe Types.SetCatalog -> Html Msg
+viewCatalogThumbnail maybeCatalog =
+    case maybeCatalog |> Maybe.andThen .imageUrl of
+        Just imageUrl ->
+            img
+                [ src imageUrl
+                , alt ("Setin kuva: " ++ (maybeCatalog |> Maybe.map .name |> Maybe.withDefault ""))
+                , attribute "loading" "lazy"
+                , attribute "referrerpolicy" "no-referrer"
+                , class "mt-3 h-32 w-32 rounded object-contain"
+                ]
+                []
+
+        Nothing ->
+            text ""
+
+
 catalogSummary : Types.SetCatalog -> String
 catalogSummary catalog =
-    catalog.name
+    catalogProviderName catalog.provider
+        ++ " · "
+        ++ catalog.name
         ++ (catalog.year |> Maybe.map (\year -> " · " ++ String.fromInt year) |> Maybe.withDefault "")
         ++ (catalog.pieces |> Maybe.map (\pieces -> " · " ++ String.fromInt pieces ++ " osaa") |> Maybe.withDefault "")
 
 
-lookupProvider : Types.CatalogProvider -> Api.LookupProvider
-lookupProvider provider =
+catalogProviderName : Types.CatalogProvider -> String
+catalogProviderName provider =
     case provider of
         Types.RebrickableCatalog ->
-            Api.RebrickableProvider
+            "Rebrickable"
 
         Types.BricksetCatalog ->
-            Api.BricksetProvider
-
-
-catalogProvider : Api.LookupProvider -> Types.CatalogProvider
-catalogProvider provider =
-    case provider of
-        Api.RebrickableProvider ->
-            Types.RebrickableCatalog
-
-        Api.BricksetProvider ->
-            Types.BricksetCatalog
+            "Brickset"
 
 
 viewCodeLinks : List Service -> String -> Html Msg
@@ -1275,6 +1678,15 @@ viewMarkdown markdown =
 
     else
         section [ class "markdown-content mt-8 max-w-none border-t border-border-default pt-6 type-body" ] (markdownNodes markdown)
+
+
+viewItemMarkdown : String -> Html Msg
+viewItemMarkdown markdown =
+    if String.trim markdown == "" then
+        text ""
+
+    else
+        div [ class "markdown-content mt-2 max-w-none type-body" ] (markdownNodes markdown)
 
 
 viewMarkdownPreview : String -> Html Msg
@@ -1390,29 +1802,50 @@ viewEditForm model maybeId =
                 [ h1 [ class "type-h1" ]
                     [ text
                         (if maybeId == Nothing then
-                            "Uusi settilista"
+                            "Uusi pöytäesite"
 
                          else
-                            "Muokkaa settilistaa"
+                            "Muokkaa pöytäesitettä"
                         )
                     ]
-                , p [ class "mt-2 type-body text-text-muted" ] [ text "Lisää setit haluamaasi järjestykseen ja valitse kullekin listalle sopivat linkkipalvelut." ]
+                , p [ class "mt-2 type-body text-text-muted" ] [ text "Järjestä teokset ja täydennä listan kuvaus." ]
                 ]
             , a [ href "#/", class "text-brand underline" ] [ text "Peruuta" ]
             ]
-        , div [ class "space-y-6 rounded-lg border border-border-default bg-white p-5 sm:p-8" ]
-            [ if maybeId /= Nothing then
-                viewEditSets model
+        , div [ class "space-y-6 rounded-lg bg-white" ]
+            [ editorTabs model.editorTab
+            , div
+                [ attribute "role" "tabpanel"
+                , id
+                    (if model.editorTab == ItemsTab then
+                        "editor-panel-items"
 
-              else
-                text ""
-            , Form.textInput (Form.defaultField "title" "Listan otsikko")
-                { value = model.form.title
-                , onInput = TitleChanged
-                , inputType = Form.Text
-                , placeholder = Just "Esim. Keskiaikaiset linnat"
-                }
-            , markdownEditor (List.member "list-markdown" model.markdownPreviewIds) "list-markdown" "Kuvaus" model.form.markdown MarkdownChanged
+                     else
+                        "editor-panel-description"
+                    )
+                , attribute "aria-labelledby"
+                    (if model.editorTab == ItemsTab then
+                        "editor-tab-items"
+
+                     else
+                        "editor-tab-description"
+                    )
+                ]
+                [ case model.editorTab of
+                    ItemsTab ->
+                        viewEditSets model
+
+                    DescriptionTab ->
+                        div [ class "space-y-4" ]
+                            [ Form.textInput (Form.defaultField "title" "Listan otsikko")
+                                { value = model.form.title
+                                , onInput = TitleChanged
+                                , inputType = Form.Text
+                                , placeholder = Just "Esim. Keskiaikaiset linnat"
+                                }
+                            , markdownEditor (List.member "list-markdown" model.markdownPreviewIds) "list-markdown" "Kuvaus" model.form.markdown MarkdownChanged
+                            ]
+                ]
             , Form.radioGroup
                 { legend = "Julkaisutila"
                 , name = "list-status"
@@ -1427,11 +1860,6 @@ viewEditForm model maybeId =
                 , onSelect = StatusChanged
                 , layout = Form.Inline
                 }
-            , if maybeId == Nothing then
-                viewEditSets model
-
-              else
-                text ""
             , div [ class "flex flex-wrap items-center gap-3 border-t border-border-default pt-5" ]
                 [ sharedButton "Tallenna lista" SaveClicked Button.Primary model.saving model.saving
                 , case maybeId of
@@ -1445,18 +1873,73 @@ viewEditForm model maybeId =
         ]
 
 
+editorTabs : EditorTab -> Html Msg
+editorTabs activeTab =
+    let
+        tabButton : EditorTab -> String -> String -> Html Msg
+        tabButton tab labelText panelId =
+            let
+                isSelected =
+                    activeTab == tab
+            in
+            button
+                [ type_ "button"
+                , class
+                    ("border-b-2 px-4 py-3 type-body-small focus-visible:ring-2 focus-visible:ring-brand "
+                        ++ (if isSelected then
+                                "border-brand text-brand"
+
+                            else
+                                "border-transparent text-text-muted hover:text-brand"
+                           )
+                    )
+                , onClick (SelectEditorTab tab)
+                , attribute "role" "tab"
+                , attribute "aria-selected"
+                    (if isSelected then
+                        "true"
+
+                     else
+                        "false"
+                    )
+                , attribute "aria-controls" panelId
+                , attribute "title" labelText
+                , id
+                    (if tab == ItemsTab then
+                        "editor-tab-items"
+
+                     else
+                        "editor-tab-description"
+                    )
+                ]
+                [ text labelText ]
+    in
+    div [ class "flex items-center" ]
+        [ div
+            [ class "flex border-b border-border-default"
+            , attribute "role" "tablist"
+            , attribute "aria-label" "Listan muokkausosiot"
+            ]
+            [ tabButton ItemsTab "Teokset" "editor-panel-items"
+            , tabButton DescriptionTab "Kuvaus" "editor-panel-description"
+            ]
+        , if activeTab == ItemsTab then
+            div [ class "ml-auto" ]
+                [ sharedButton "Lisää kohde" AddSet Button.Secondary False False ]
+
+          else
+            text ""
+        ]
+
+
 viewEditSets : Model -> Html Msg
 viewEditSets model =
     section []
-        [ div [ class "mb-3 flex items-center justify-between gap-3" ]
-            [ h2 [ class "type-h2" ] [ text "Setit" ]
-            , sharedButton "Lisää kohde" AddSet Button.Secondary False False
-            ]
-        , if List.isEmpty model.form.items then
-            p [ class "rounded border border-border-default p-4 type-caption text-text-muted" ] [ text "Listalla ei ole vielä settejä." ]
+        [ if List.isEmpty model.form.items then
+            p [ class "rounded border border-border-default p-4 type-caption text-text-muted" ] [ text "Listalla ei ole vielä kohteita." ]
 
           else
-            div [ class "space-y-4" ] (List.indexedMap (viewEditSet model model.markdownPreviewIds model.form.items) model.form.items)
+            div [ class "space-y-3" ] (List.indexedMap (viewEditSet model model.markdownPreviewIds model.form.items) model.form.items)
         ]
 
 
@@ -1552,13 +2035,24 @@ sharedButton labelText message variant isDisabled isLoading =
 
 iconButton : String -> FeatherIcons.Icon -> Msg -> Bool -> Html Msg
 iconButton labelText icon message isDisabled =
-    Button.new { label = labelText, onClick = message }
-        |> Button.withVariant Button.Secondary
-        |> Button.withSize Button.Small
-        |> Button.withIcon icon
-        |> Button.iconOnly
-        |> Button.withDisabled isDisabled
-        |> Button.toHtml
+    button
+        ([ type_ "button"
+         , class "inline-flex h-[45px] w-[45px] shrink-0 items-center justify-center rounded border border-brand bg-white text-brand hover:bg-bg-subtle focus-visible:ring-2 focus-visible:ring-brand disabled:cursor-not-allowed disabled:opacity-50"
+         , disabled isDisabled
+         , attribute "aria-label" labelText
+         , attribute "title" labelText
+         ]
+            ++ (if isDisabled then
+                    []
+
+                else
+                    [ onClick message ]
+               )
+        )
+        [ icon
+            |> FeatherIcons.withSize 16
+            |> FeatherIcons.toHtml [ attribute "aria-hidden" "true", attribute "focusable" "false" ]
+        ]
 
 
 viewDeleteConfirmation : Bool -> Html Msg
@@ -1591,10 +2085,64 @@ fieldLabel labelText id control =
 
 viewEditSet : Model -> List String -> List SetItem -> Int -> SetItem -> Html Msg
 viewEditSet model previewIds items index item =
-    section [ class "rounded-lg border border-border-default p-4" ]
-        [ div [ class "flex flex-wrap items-center gap-2" ]
-            [ div [ class "min-w-0 flex-1" ]
-                [ Form.radioGroup
+    let
+        isOpen =
+            model.openSetIndex == Just index
+
+        itemTitle =
+            if String.trim item.title == "" then
+                "Kohde " ++ String.fromInt (index + 1)
+
+            else
+                item.title
+
+        detailsId =
+            "edit-set-" ++ String.fromInt index
+    in
+    section [ class "overflow-hidden rounded-lg border border-border-default bg-white" ]
+        [ div [ class "flex flex-wrap items-center gap-2 p-3" ]
+            [ iconButton "Siirrä ylemmäs" FeatherIcons.arrowUp (MoveSet index (index - 1)) (index == 0)
+            , iconButton "Siirrä alemmas" FeatherIcons.arrowDown (MoveSet index (index + 1)) (index == List.length items - 1)
+            , button
+                [ type_ "button"
+                , class "flex min-w-0 flex-1 items-center justify-start gap-3 rounded p-2 text-left hover:bg-bg-subtle focus-visible:outline focus-visible:outline-2 focus-visible:outline-brand"
+                , onClick (ToggleSetAccordion index)
+                , attribute "aria-expanded"
+                    (if isOpen then
+                        "true"
+
+                     else
+                        "false"
+                    )
+                , attribute "aria-controls" detailsId
+                , attribute "title"
+                    ((if isOpen then
+                        "Sulje kohde: "
+
+                      else
+                        "Avaa kohde: "
+                     )
+                        ++ itemTitle
+                    )
+                ]
+                [ span [ class "min-w-0 truncate type-h4" ] [ text itemTitle ]
+                , span [ class "shrink-0 text-text-muted", attribute "aria-hidden" "true" ]
+                    [ (if isOpen then
+                        FeatherIcons.chevronUp
+
+                       else
+                        FeatherIcons.chevronDown
+                      )
+                        |> FeatherIcons.withSize 18
+                        |> FeatherIcons.toHtml [ attribute "focusable" "false" ]
+                    ]
+                ]
+            , sharedButton "Poista" (RemoveSet index) Button.Danger False False
+            ]
+        , if isOpen then
+            div [ id detailsId, class "space-y-4 border-t border-border-default p-4" ]
+                [ viewSetSearch model index item
+                , Form.radioGroup
                     { legend = "Kohteen tyyppi"
                     , name = "item-kind-" ++ String.fromInt index
                     , required = False
@@ -1609,114 +2157,228 @@ viewEditSet model previewIds items index item =
                     , onSelect = ItemKindChanged index
                     , layout = Form.Chips
                     }
+                , Form.textInput (Form.defaultField ("item-title-" ++ String.fromInt index) "Kohteen otsikko")
+                    { value = item.title, onInput = ItemTitleChanged index, inputType = Form.Text, placeholder = Just "Esim. Millennium Falcon" }
+                , if Types.itemHasTitle item then
+                    text ""
+
+                  else
+                    p [ class "mt-1 type-caption text-red-700" ] [ text "Otsikko vaaditaan jokaiselle kohteelle." ]
+                , markdownEditor
+                    (List.member ("item-description-" ++ String.fromInt index) previewIds)
+                    ("item-description-" ++ String.fromInt index)
+                    "Kohteen kuvaus"
+                    item.description
+                    (ItemDescriptionChanged index)
+                , Form.textInput (Form.defaultField ("url-" ++ String.fromInt index) "Lisätietojen URL")
+                    { value = item.url, onInput = ItemUrlChanged index, inputType = Form.Url, placeholder = Just "https://example.com" }
+                , viewCatalogSnapshot item.catalog
+                , fieldset [ class "mt-4" ]
+                    [ Html.legend [ class "type-caption text-text-muted" ] [ text "Näytä linkit palveluissa" ]
+                    , div [ class "mt-2 flex flex-wrap gap-x-5 gap-y-2" ]
+                        (List.map (serviceCheckbox index item.services) [ Lego, Brickset, Bricklink, Rebrickable ])
+                    ]
                 ]
-            , iconButton "Siirrä ylemmäs" FeatherIcons.arrowUp (MoveSet index (index - 1)) (index == 0)
-            , iconButton "Siirrä alemmas" FeatherIcons.arrowDown (MoveSet index (index + 1)) (index == List.length items - 1)
-            , sharedButton "Poista" (RemoveSet index) Button.Danger False False
-            ]
-        , Form.textInput (Form.defaultField ("item-title-" ++ String.fromInt index) "Kohteen otsikko")
-            { value = item.title, onInput = ItemTitleChanged index, inputType = Form.Text, placeholder = Just "Esim. Millennium Falcon" }
-        , if Types.itemHasTitle item then
-            text ""
 
           else
-            p [ class "mt-1 type-caption text-red-700" ] [ text "Otsikko vaaditaan jokaiselle kohteelle." ]
-        , Form.textarea (Form.defaultField ("codes-" ++ String.fromInt index) "LEGO-tunnukset (yksi tunnus rivillä)")
-            { value = item.codesText, onInput = ItemCodesChanged index, rows = 3 }
-        , p [ class "mt-1 type-caption text-text-muted" ] [ text "MOC-kohteelle tunnukset ovat valinnaisia. Setille ja vaihtoehtoiselle rakennelmalle vähintään yksi tunnus on pakollinen." ]
-        , if Types.itemHasValidCodes item then
             text ""
-
-          else
-            p [ class "mt-1 type-caption text-red-700" ] [ text "Lisää vähintään yksi LEGO-tunnus tälle kohteelle." ]
-        , viewSetLookup model index item
-        , Form.textInput (Form.defaultField ("url-" ++ String.fromInt index) "Lisätietojen URL")
-            { value = item.url, onInput = ItemUrlChanged index, inputType = Form.Url, placeholder = Just "https://example.com" }
-        , markdownEditor
-            (List.member ("item-description-" ++ String.fromInt index) previewIds)
-            ("item-description-" ++ String.fromInt index)
-            "Kohteen kuvaus"
-            item.description
-            (ItemDescriptionChanged index)
-        , fieldset [ class "mt-4" ]
-            [ Html.legend [ class "type-caption text-text-muted" ] [ text "Näytä linkit palveluissa" ]
-            , div [ class "mt-2 flex flex-wrap gap-x-5 gap-y-2" ]
-                (List.map (serviceCheckbox index item.services) [ Lego, Brickset, Bricklink, Rebrickable ])
-            ]
         ]
 
 
-viewSetLookup : Model -> Int -> SetItem -> Html Msg
-viewSetLookup model index item =
+viewSetSearch : Model -> Int -> SetItem -> Html Msg
+viewSetSearch model index item =
     let
-        maybeCode =
-            Types.firstLookupCode item
+        inputId =
+            "item-search-" ++ String.fromInt index
 
-        action provider labelText =
-            Button.new { label = labelText, onClick = SetLookupClicked index provider }
-                |> Button.withVariant Button.Secondary
-                |> Button.withSize Button.Small
-                |> Button.withDisabled (maybeCode == Nothing)
-                |> Button.toHtml
+        listId =
+            inputId ++ "-suggestions"
 
-        resultView state =
-            case state of
-                LookupLoading _ provider code ->
+        manualCodeId =
+            "manual-code-" ++ String.fromInt index
+
+        query =
+            Dict.get index model.setSearchQueries |> Maybe.withDefault ""
+
+        searchState =
+            Dict.get index model.setSearchStates
+
+        suggestions =
+            case searchState of
+                Just (SetSearchResults _ _ results) ->
+                    results
+
+                _ ->
+                    []
+
+        expanded =
+            not (List.isEmpty suggestions)
+
+        status =
+            case searchState of
+                Just (SetSearchWaiting _ _) ->
+                    p [ attribute "aria-live" "polite", class "type-caption text-text-muted" ] [ text "Etsitään Rebrickablesta…" ]
+
+                Just (SetSearchLoading _ _) ->
+                    p [ attribute "aria-live" "polite", class "type-caption text-text-muted" ] [ text "Etsitään Rebrickablesta…" ]
+
+                Just (SetSearchResults _ _ results) ->
+                    if List.isEmpty results then
+                        p [ attribute "aria-live" "polite", class "type-caption text-text-muted" ] [ text "Settiä ei löytynyt. Voit täyttää tiedot itse." ]
+
+                    else
+                        text ""
+
+                Just (SetSearchFailed _ _ message) ->
+                    p [ attribute "aria-live" "polite", class "type-caption text-brand-red" ] [ text message ]
+
+                Just (SetSearchEnriching _ _ _) ->
+                    p [ attribute "aria-live" "polite", class "type-caption text-text-muted" ] [ text "Tietoja ja pikkukuvaa haetaan Bricksetistä…" ]
+
+                Just (SetSearchSavingThumbnail _ _ _) ->
+                    p [ attribute "aria-live" "polite", class "type-caption text-text-muted" ] [ text "Muunnetaan pikkukuvaa 256px WebP-muotoon ja tallennetaan…" ]
+
+                Just (SetSearchEnriched _ _ hasBricksetMetadata hasThumbnail) ->
                     p [ attribute "aria-live" "polite", class "type-caption text-text-muted" ]
-                        [ text ("Haetaan " ++ lookupProviderLabel provider ++ "-tietoja tunnukselle " ++ code ++ "…") ]
+                        [ text
+                            (case ( hasBricksetMetadata, hasThumbnail ) of
+                                ( True, True ) ->
+                                    "Setti lisättiin. Brickset-tiedot ja WebP-pikkukuva tallennettiin."
 
-                LookupLoaded requestId _ code result ->
-                    div [ attribute "aria-live" "polite", class "rounded bg-bg-subtle p-3 type-caption" ]
-                        [ p [] [ text (lookupSummary result) ]
-                        , div [ class "mt-2 flex flex-wrap items-center gap-3" ]
-                            ([ Button.new { label = "Tallenna tiedot", onClick = AcceptLookup index requestId code }
-                                |> Button.withVariant Button.Ghost
-                                |> Button.withSize Button.Small
-                                |> Button.toHtml
-                             ]
-                                ++ (case MarkdownSafety.safeWebUrl result.sourceUrl of
-                                        Just sourceUrl ->
-                                            [ a [ href sourceUrl, target "_blank", attribute "rel" "noopener noreferrer", class "text-brand underline" ] [ text "Avaa lähde" ] ]
+                                ( True, False ) ->
+                                    "Setti lisättiin. Brickset-tiedot tallennettiin, mutta pikkukuvaa ei saatu."
 
-                                        Nothing ->
-                                            []
-                                   )
+                                ( False, True ) ->
+                                    "Setti lisättiin. Rebrickable-pikkukuva tallennettiin WebP-muodossa; Brickset-tietoja ei saatu."
+
+                                ( False, False ) ->
+                                    "Setti lisättiin. Brickset-tietoja ja pikkukuvaa ei saatu."
                             )
                         ]
 
-                LookupFailed _ _ _ message ->
-                    p [ attribute "aria-live" "polite", class "type-caption text-brand-red" ] [ text message ]
+                Just (SetSearchEnrichmentFailed _ _) ->
+                    p [ attribute "aria-live" "polite", class "type-caption text-text-muted" ] [ text "Setti lisättiin, mutta Brickset-tietoja ei saatu. Otsikko ja tunnus ovat täytettyinä." ]
+
+                Just (SetSearchCodeAdded message) ->
+                    p [ attribute "aria-live" "polite", class "type-caption text-text-muted" ] [ text message ]
+
+                Nothing ->
+                    p [ class "type-caption text-text-muted" ] [ text "Hae Rebrickablesta nimellä tai setin tunnuksella." ]
+
+        suggestionButton requestId suggestion =
+            let
+                metadata =
+                    [ Just suggestion.code
+                    , Maybe.map String.fromInt suggestion.year
+                    , Maybe.map (\pieces -> String.fromInt pieces ++ " osaa") suggestion.pieces
+                    ]
+                        |> List.filterMap identity
+                        |> String.join " · "
+            in
+            li [ attribute "role" "presentation" ]
+                [ button
+                    [ type_ "button"
+                    , class "flex w-full flex-col items-start gap-1 px-3 py-2 text-left hover:bg-bg-subtle focus-visible:ring-2 focus-visible:ring-brand"
+                    , onClick (SetSuggestionSelected index requestId suggestion)
+                    , attribute "role" "option"
+                    , attribute "aria-selected" "false"
+                    , attribute "title" (suggestion.name ++ " (" ++ suggestion.code ++ ")")
+                    ]
+                    [ span [ class "type-body-small" ] [ text suggestion.name ]
+                    , span [ class "type-caption text-text-muted" ] [ text metadata ]
+                    ]
+                ]
+
+        suggestionsView =
+            case searchState of
+                Just (SetSearchResults requestId _ results) ->
+                    if List.isEmpty results then
+                        text ""
+
+                    else
+                        ul
+                            [ id listId
+                            , class "max-h-72 overflow-y-auto rounded border border-border-default bg-white"
+                            , attribute "role" "listbox"
+                            , attribute "aria-label" "Rebrickable-settiehdotukset"
+                            ]
+                            (List.map (suggestionButton requestId) results)
+
+                _ ->
+                    text ""
+
+        codesWidget =
+            fieldset [ class "space-y-2" ]
+                [ Html.legend [ class "type-body-small" ] [ text "LEGO-tunnukset" ]
+                , if List.isEmpty item.codes then
+                    p [ class "type-caption text-text-muted" ] [ text "Tunnuksia ei vielä ole." ]
+
+                  else
+                    ul [ class "flex flex-wrap gap-2" ]
+                        (List.map
+                            (\code ->
+                                li [ class "inline-flex items-center gap-1 rounded bg-bg-subtle px-2 py-1" ]
+                                    [ span [ class "type-mono" ] [ text code ]
+                                    , button
+                                        [ type_ "button"
+                                        , class "inline-flex h-7 w-7 items-center justify-center rounded text-text-muted hover:bg-white hover:text-brand focus-visible:ring-2 focus-visible:ring-brand"
+                                        , onClick (RemoveItemCode index code)
+                                        , attribute "aria-label" ("Poista tunnus " ++ code)
+                                        , attribute "title" ("Poista tunnus " ++ code)
+                                        ]
+                                        [ FeatherIcons.x |> FeatherIcons.withSize 14 |> FeatherIcons.toHtml [ attribute "aria-hidden" "true" ] ]
+                                    ]
+                            )
+                            item.codes
+                        )
+                , div [ class "flex flex-wrap items-end gap-2" ]
+                    [ div [ class "min-w-48 flex-1" ]
+                        [ label [ class "mb-1 block type-caption text-text-muted", attribute "for" manualCodeId ] [ text "Tai lisää tunnus käsin" ]
+                        , input
+                            [ id manualCodeId
+                            , type_ "text"
+                            , value (Dict.get index model.codeDrafts |> Maybe.withDefault "")
+                            , onInput (CodeDraftChanged index)
+                            , placeholder "Esim. 75192-1 tai MOC-123"
+                            , class inputClass
+                            ]
+                            []
+                        ]
+                    , sharedButton "Lisää tunnus" (AddManualCode index) Button.Secondary False False
+                    ]
+                , if Types.itemHasValidCodes item then
+                    text ""
+
+                  else
+                    p [ class "type-caption text-brand-red" ] [ text "Setille ja vaihtoehtoiselle rakennelmalle vähintään yksi tunnus on pakollinen." ]
+                ]
     in
-    div [ class "mt-3 space-y-2" ]
-        [ div [ class "flex flex-wrap items-center gap-2" ]
-            [ span [ class "type-caption text-text-muted" ] [ text "Hae setin tietoja:" ]
-            , action Api.RebrickableProvider "Rebrickable"
-            , action Api.BricksetProvider "Brickset"
+    div [ class "relative space-y-2" ]
+        [ label [ class "block type-body-small", attribute "for" inputId ] [ text "Hae settiä" ]
+        , input
+            [ id inputId
+            , type_ "search"
+            , value query
+            , onInput (SetSearchChanged index)
+            , placeholder "Esim. Millennium Falcon tai 6285"
+            , attribute "autocomplete" "off"
+            , attribute "role" "combobox"
+            , attribute "aria-autocomplete" "list"
+            , attribute "aria-controls" listId
+            , attribute "aria-expanded"
+                (if expanded then
+                    "true"
+
+                 else
+                    "false"
+                )
+            , class inputClass
             ]
-        , case Dict.get index model.setLookups of
-            Just state ->
-                resultView state
-
-            Nothing ->
-                text ""
+            []
+        , status
+        , suggestionsView
+        , codesWidget
         ]
-
-
-lookupProviderLabel : Api.LookupProvider -> String
-lookupProviderLabel provider =
-    case provider of
-        Api.RebrickableProvider ->
-            "Rebrickable"
-
-        Api.BricksetProvider ->
-            "Brickset"
-
-
-lookupSummary : Api.SetLookupResult -> String
-lookupSummary result =
-    result.name
-        ++ (result.year |> Maybe.map (\year -> " · " ++ String.fromInt year) |> Maybe.withDefault "")
-        ++ (result.pieces |> Maybe.map (\pieces -> " · " ++ String.fromInt pieces ++ " osaa") |> Maybe.withDefault "")
 
 
 serviceCheckbox : Int -> List Service -> Service -> Html Msg

@@ -16,7 +16,7 @@
     "name": "Millennium Falcon",
     "year": 2017,
     "pieces": 7541,
-    "imageUrl": "https://cdn.rebrickable.com/media/sets/75192-1.jpg"
+    "imageUrl": "https://data.palikkaharrastajat.fi/api/files/table_thumbnails/.../set-75192-1.webp"
   }
 }
 ```
@@ -29,17 +29,15 @@ it is an absolute HTTP or HTTPS URL. Item and list Markdown are rendered by the
 safe Markdown renderer and have a lightweight formatting toolbar with preview.
 Array position remains the explicit display order.
 
-The optional `catalog` object is a user-accepted metadata snapshot from
-`rebrickable` or `brickset`. It stores the provider, the item's first valid
-lookup code, provider name, optional year and piece count, and optional HTTPS
-thumbnail URL. The editor only stores a lookup result after “Tallenna tiedot”;
-it fills a blank item title but never replaces a custom title. Changing the
-first valid code clears the snapshot. Decoding drops malformed snapshots and
-snapshots for a different code; encoding validates the same constraints and
-allows thumbnails only from the approved Rebrickable/Brickset image hosts.
-Public list rendering uses this stored data and never requests provider APIs.
-When a saved thumbnail is displayed, the browser makes a direct asset GET to
-that provider image host; it is not an API lookup.
+The optional `catalog` object stores a selected `rebrickable` suggestion and
+optional `brickset` enrichment: provider, the item's first valid lookup code,
+provider name, optional year and piece count, and optional thumbnail URL. A
+suggestion fills the item title and code; changing the first valid code clears
+the snapshot. Decoding drops malformed snapshots and snapshots for a different
+code; encoding validates the same constraints and permits only approved provider
+image hosts or PocketBase-hosted thumbnail URLs. Public list rendering uses this
+stored data and never requests provider APIs. Brickset thumbnails are app-encoded
+WebP files with dimensions no larger than 256×256, cached in `table_thumbnails`.
 
 The frontend maps these service values to LEGO.com set search, Brickset's set
 page, BrickLink's catalog item page, and Rebrickable's set page
