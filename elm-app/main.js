@@ -22,6 +22,16 @@ const app = Elm.Main.init({
   },
 })
 
+document.addEventListener('dragstart', (event) => {
+  const target = event.target
+  const handle = target instanceof Element ? target.closest('[data-set-drag-handle]') : null
+  const index = handle?.getAttribute('data-set-index')
+  if (index === null || index === undefined || !event.dataTransfer) return
+
+  event.dataTransfer.setData('text/plain', index)
+  event.dataTransfer.effectAllowed = 'move'
+}, true)
+
 const SET_SEARCH_DEBOUNCE_MS = 1000
 const MAX_SET_IMAGE_BYTES = 1_000_000
 const MAX_LIST_PHOTO_BYTES = 20_000_000
@@ -39,16 +49,30 @@ app.ports.scheduleSetSearch.subscribe((payload) => {
 
 async function decodeThumbnailImage(blob) {
   if (typeof createImageBitmap === 'function') {
-    const image = await createImageBitmap(blob)
-    return { image, release: () => image.close() }
+    try {
+      const image = await createImageBitmap(blob)
+      return { image, release: () => image.close() }
+    } catch (_) {
+      // Some browsers cannot decode formats such as HEIC through createImageBitmap,
+      // even when their native image decoder can display them.
+    }
   }
+
   const objectUrl = URL.createObjectURL(blob)
   const image = new Image()
-  image.src = objectUrl
   try {
-    await image.decode()
+    if (typeof image.decode === 'function') {
+      image.src = objectUrl
+      await image.decode()
+    } else {
+      await new Promise((resolve, reject) => {
+        image.onload = resolve
+        image.onerror = () => reject(new Error('Image decoding failed'))
+        image.src = objectUrl
+      })
+    }
     return { image, release: () => URL.revokeObjectURL(objectUrl) }
-  } catch (_) {
+  } catch (error) {
     URL.revokeObjectURL(objectUrl)
     throw error
   }
@@ -138,6 +162,7 @@ app.ports.processListPhoto.subscribe(async (payload) => {
   let photo = ''
   let fileToken = ''
   let errorCode = ''
+  let failureStage = 'validation'
 
   try {
     if (!/^[a-z0-9]{10,20}$/i.test(payload.listId)) throw new Error('Invalid list id')
@@ -151,11 +176,13 @@ app.ports.processListPhoto.subscribe(async (payload) => {
       throw new Error('Photo too large')
     }
 
+    failureStage = 'image processing'
     const webp = await encodeWebpThumbnail(sourceFile, MAX_LIST_PHOTO_BYTES)
     const file = new File([webp], 'list-cover.webp', { type: 'image/webp' })
     const formData = new FormData()
     formData.append('photo', file)
 
+    failureStage = 'PocketBase upload'
     const PocketBase = (await import('pocketbase')).default
     const pb = new PocketBase(payload.pbBaseUrl)
     pb.authStore.save(payload.token, null)
@@ -168,13 +195,31 @@ app.ports.processListPhoto.subscribe(async (payload) => {
         // Published lists can still serve their protected photo under the public view rule.
       }
     }
-  } catch (_) {
+  } catch (error) {
+    console.error(`List photo ${failureStage} failed`, error)
     if (!errorCode) errorCode = 'processing-failed'
   } finally {
     if (input) input.value = ''
   }
 
   app.ports.listPhotoProcessed.send({ listId: payload.listId, photo, fileToken, error: errorCode })
+})
+
+app.ports.clearListPhoto.subscribe(async (payload) => {
+  let error = ''
+  try {
+    if (!/^[a-z0-9]{10,20}$/i.test(payload.listId)) throw new Error('Invalid list id')
+
+    const PocketBase = (await import('pocketbase')).default
+    const pb = new PocketBase(payload.pbBaseUrl)
+    pb.authStore.save(payload.token, null)
+    await pb.collection('table_catalogs').update(payload.listId, { photo: '' })
+  } catch (cause) {
+    console.error('List cover removal failed', cause)
+    error = 'removal-failed'
+  }
+
+  app.ports.listPhotoCleared.send({ listId: payload.listId, error })
 })
 
 app.ports.requestListPhotoFileToken.subscribe(async (payload) => {

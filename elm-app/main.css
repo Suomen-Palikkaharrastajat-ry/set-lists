@@ -51,6 +51,6 @@
     margin: 0;
     background: white;
   }
-  .print-qr ~ .print-title { break-before: page; }
+  .print-title-page { break-before: page; page-break-before: always; }
   .print-qr-code svg { width: 90mm !important; height: 90mm !important; display: block; }
 }
