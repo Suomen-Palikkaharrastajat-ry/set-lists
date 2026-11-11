@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { encodeLosslessWebp, stripWebpMetadata, thumbnailDimensions } from './photo-pipeline.mjs'
+import { encodeLosslessWebp, stripWebpMetadata, thumbnailDimensions, validateCropRegion } from './photo-pipeline.mjs'
 
 function webpChunk(type, payload) {
   const size = payload.length
@@ -42,6 +42,26 @@ test('thumbnail dimensions preserve aspect ratio, cap the longest edge, and neve
   assert.deepEqual(thumbnailDimensions(4000, 2000), { width: 256, height: 128 })
   assert.deepEqual(thumbnailDimensions(2000, 4000), { width: 128, height: 256 })
   assert.deepEqual(thumbnailDimensions(120, 80), { width: 120, height: 80 })
+})
+
+test('cropped regions are sized to the 256px thumbnail limit without upscaling', () => {
+  const region = validateCropRegion(4000, 3000, { x: 500, y: 0, width: 3000, height: 3000 })
+  assert.deepEqual(thumbnailDimensions(region.width, region.height), { width: 256, height: 256 })
+  const wide = validateCropRegion(4000, 3000, { x: 0, y: 375, width: 4000, height: 2250 })
+  assert.deepEqual(thumbnailDimensions(wide.width, wide.height), { width: 256, height: 144 })
+  assert.deepEqual(thumbnailDimensions(90, 120), { width: 90, height: 120 })
+})
+
+test('crop regions must be whole pixels inside the source image', () => {
+  assert.deepEqual(validateCropRegion(10, 8, { x: 0, y: 0, width: 10, height: 8 }), { x: 0, y: 0, width: 10, height: 8 })
+  assert.throws(() => validateCropRegion(10, 8, { x: 0, y: 0, width: 11, height: 8 }), /Invalid crop region/)
+  assert.throws(() => validateCropRegion(10, 8, { x: 9, y: 0, width: 2, height: 8 }), /Invalid crop region/)
+  assert.throws(() => validateCropRegion(10, 8, { x: -1, y: 0, width: 2, height: 2 }), /Invalid crop region/)
+  assert.throws(() => validateCropRegion(10, 8, { x: 0, y: 0, width: 0, height: 2 }), /Invalid crop region/)
+  assert.throws(() => validateCropRegion(10, 8, { x: 0.5, y: 0, width: 2, height: 2 }), /Invalid crop region/)
+  assert.throws(() => validateCropRegion(10, 8, { x: 0, y: 0, width: Number.NaN, height: 2 }), /Invalid crop region/)
+  assert.throws(() => validateCropRegion(10, 8, undefined), /Invalid crop region/)
+  assert.throws(() => validateCropRegion(0, 8, { x: 0, y: 0, width: 1, height: 1 }), /Invalid image dimensions/)
 })
 
 test('WebP sanitizing removes EXIF and other metadata chunks and clears feature flags', async () => {

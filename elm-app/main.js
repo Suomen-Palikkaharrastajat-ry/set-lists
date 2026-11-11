@@ -3,7 +3,8 @@ import { Elm } from './src/Main.elm'
 import siteConfig from 'virtual:site-config'
 import { getInitAuth, wirePocketBaseAuthPorts, triggerBackgroundAuthRefresh } from './packages/app-toolkit/js/pocketbase-auth.js'
 import { appSettings, pickLang, showLanguage } from './packages/site-config/browser.mjs'
-import { encodeLosslessWebp, stripWebpMetadata, thumbnailDimensions } from './photo-pipeline.mjs'
+import { encodeLosslessWebp, stripWebpMetadata, thumbnailDimensions, validateCropRegion } from './photo-pipeline.mjs'
+import { installCropGestures } from './crop-gestures.mjs'
 
 const settings = appSettings(siteConfig, pickLang(siteConfig))
 const pbBaseUrl = import.meta.env.VITE_POCKETBASE_URL || settings.pocketbase_url
@@ -22,6 +23,8 @@ const app = Elm.Main.init({
   },
 })
 
+installCropGestures(document, (gesture) => app.ports.cropGesture.send(gesture))
+
 document.addEventListener('dragstart', (event) => {
   const target = event.target
   const handle = target instanceof Element ? target.closest('[data-set-drag-handle]') : null
@@ -36,7 +39,9 @@ const SET_SEARCH_DEBOUNCE_MS = 1000
 const MAX_SET_IMAGE_BYTES = 1_000_000
 const MAX_LIST_PHOTO_BYTES = 20_000_000
 const MAX_THUMBNAIL_BYTES = 200_000
+const CROP_PREVIEW_MAX_DIMENSION = 1024
 const setSearchTimers = new Map()
+let pendingListCover = null
 app.ports.scheduleSetSearch.subscribe((payload) => {
   const previous = setSearchTimers.get(payload.index)
   if (previous) clearTimeout(previous)
@@ -78,36 +83,47 @@ async function decodeThumbnailImage(blob) {
   }
 }
 
+function drawRegionToCanvas(image, region, width, height) {
+  const canvas = document.createElement('canvas')
+  canvas.width = width
+  canvas.height = height
+  const context = canvas.getContext('2d')
+  if (!context) throw new Error('Canvas unavailable')
+  context.drawImage(image, region.x, region.y, region.width, region.height, 0, 0, width, height)
+  return canvas
+}
+
+async function encodeCanvasWebp(canvas) {
+  let encoded = null
+  if (typeof canvas.toBlob === 'function') {
+    try {
+      encoded = await new Promise((resolve) => canvas.toBlob(resolve, 'image/webp', 0.82))
+    } catch (_) {
+      // Use the bounded lossless encoder when the browser cannot encode a canvas to WebP.
+    }
+  }
+  const webp = encoded?.type === 'image/webp'
+    ? encoded
+    : encodeLosslessWebp(canvas.width, canvas.height, canvas.getContext('2d').getImageData(0, 0, canvas.width, canvas.height).data)
+
+  const sanitized = await stripWebpMetadata(webp)
+  if (sanitized.size === 0 || sanitized.size > MAX_THUMBNAIL_BYTES) throw new Error('WebP thumbnail is too large')
+  return sanitized
+}
+
+function decodedImageSize(image) {
+  return { width: image.width || image.naturalWidth, height: image.height || image.naturalHeight }
+}
+
 async function encodeWebpThumbnail(sourceBlob, maxSourceBytes) {
   if (sourceBlob.size === 0 || sourceBlob.size > maxSourceBytes) throw new Error('Invalid source image size')
 
   const decoded = await decodeThumbnailImage(sourceBlob)
   try {
-    const image = decoded.image
-    const sourceWidth = image.width || image.naturalWidth
-    const sourceHeight = image.height || image.naturalHeight
-    const dimensions = thumbnailDimensions(sourceWidth, sourceHeight)
-    const canvas = document.createElement('canvas')
-    canvas.width = dimensions.width
-    canvas.height = dimensions.height
-    const context = canvas.getContext('2d')
-    if (!context) throw new Error('Canvas unavailable')
-    context.drawImage(image, 0, 0, canvas.width, canvas.height)
-    let encoded = null
-    if (typeof canvas.toBlob === 'function') {
-      try {
-        encoded = await new Promise((resolve) => canvas.toBlob(resolve, 'image/webp', 0.82))
-      } catch (_) {
-        // Use the bounded lossless encoder when the browser cannot encode a canvas to WebP.
-      }
-    }
-    const webp = encoded?.type === 'image/webp'
-      ? encoded
-      : encodeLosslessWebp(canvas.width, canvas.height, context.getImageData(0, 0, canvas.width, canvas.height).data)
-
-    const sanitized = await stripWebpMetadata(webp)
-    if (sanitized.size === 0 || sanitized.size > MAX_THUMBNAIL_BYTES) throw new Error('WebP thumbnail is too large')
-    return sanitized
+    const source = decodedImageSize(decoded.image)
+    const dimensions = thumbnailDimensions(source.width, source.height)
+    const canvas = drawRegionToCanvas(decoded.image, { x: 0, y: 0, ...source }, dimensions.width, dimensions.height)
+    return await encodeCanvasWebp(canvas)
   } finally {
     decoded.release()
   }
@@ -166,12 +182,14 @@ app.ports.processSetThumbnail.subscribe(async (payload) => {
   })
 })
 
-app.ports.processListPhoto.subscribe(async (payload) => {
+app.ports.prepareListPhoto.subscribe(async (payload) => {
   const input = document.getElementById(payload.inputId)
-  let photo = ''
-  let fileToken = ''
+  let previewUrl = ''
+  let width = 0
+  let height = 0
   let errorCode = ''
   let failureStage = 'validation'
+  pendingListCover = null
 
   try {
     if (!/^[a-z0-9]{10,20}$/i.test(payload.listId)) throw new Error('Invalid list id')
@@ -186,7 +204,47 @@ app.ports.processListPhoto.subscribe(async (payload) => {
     }
 
     failureStage = 'image processing'
-    const webp = await encodeWebpThumbnail(sourceFile, MAX_LIST_PHOTO_BYTES)
+    const decoded = await decodeThumbnailImage(sourceFile)
+    try {
+      const source = decodedImageSize(decoded.image)
+      const preview = thumbnailDimensions(source.width, source.height, CROP_PREVIEW_MAX_DIMENSION)
+      const canvas = drawRegionToCanvas(decoded.image, { x: 0, y: 0, ...source }, preview.width, preview.height)
+      previewUrl = canvas.toDataURL('image/webp', 0.9)
+      width = preview.width
+      height = preview.height
+      pendingListCover = { listId: payload.listId, canvas }
+    } finally {
+      decoded.release()
+    }
+  } catch (error) {
+    console.error(`List photo ${failureStage} failed`, error)
+    if (!errorCode) errorCode = 'processing-failed'
+  } finally {
+    if (input) input.value = ''
+  }
+
+  app.ports.listPhotoPrepared.send({ listId: payload.listId, previewUrl, width, height, error: errorCode })
+})
+
+app.ports.cancelListPhotoPreparation.subscribe((payload) => {
+  if (pendingListCover?.listId === payload.listId) pendingListCover = null
+})
+
+app.ports.applyListPhoto.subscribe(async (payload) => {
+  const cover = pendingListCover
+  pendingListCover = null
+  let photo = ''
+  let fileToken = ''
+  let errorCode = ''
+  let failureStage = 'image processing'
+
+  try {
+    if (!/^[a-z0-9]{10,20}$/i.test(payload.listId)) throw new Error('Invalid list id')
+    if (!cover || cover.listId !== payload.listId) throw new Error('Prepared photo is missing')
+
+    const region = validateCropRegion(cover.canvas.width, cover.canvas.height, payload.crop)
+    const output = thumbnailDimensions(region.width, region.height)
+    const webp = await encodeCanvasWebp(drawRegionToCanvas(cover.canvas, region, output.width, output.height))
     const file = new File([webp], 'list-cover.webp', { type: 'image/webp' })
     const formData = new FormData()
     formData.append('photo', file)
@@ -207,8 +265,6 @@ app.ports.processListPhoto.subscribe(async (payload) => {
   } catch (error) {
     console.error(`List photo ${failureStage} failed`, error)
     if (!errorCode) errorCode = 'processing-failed'
-  } finally {
-    if (input) input.value = ''
   }
 
   app.ports.listPhotoProcessed.send({ listId: payload.listId, photo, fileToken, error: errorCode })

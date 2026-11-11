@@ -14,6 +14,20 @@ export function thumbnailDimensions(width, height, maxDimension = 256) {
   }
 }
 
+export function validateCropRegion(sourceWidth, sourceHeight, region) {
+  const values = [ region?.x, region?.y, region?.width, region?.height ]
+  if (![sourceWidth, sourceHeight].every(Number.isInteger) || sourceWidth < 1 || sourceHeight < 1) {
+    throw new Error('Invalid image dimensions')
+  }
+  if (!values.every(Number.isInteger)) throw new Error('Invalid crop region')
+
+  const { x, y, width, height } = region
+  if (x < 0 || y < 0 || width < 1 || height < 1 || x + width > sourceWidth || y + height > sourceHeight) {
+    throw new Error('Invalid crop region')
+  }
+  return { x, y, width, height }
+}
+
 export async function stripWebpMetadata(blob) {
   const input = new Uint8Array(await blob.arrayBuffer())
   const inputView = new DataView(input.buffer, input.byteOffset, input.byteLength)

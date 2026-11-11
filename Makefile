@@ -1,4 +1,4 @@
-.PHONY: help vendor shell site-config site-config-check elm-dev elm-build elm-test elm-check elm-format elm-tailwind-gen pb-hook-test pb-migration-check photo-pipeline-test statics-build statics statics-test dist build test check clean
+.PHONY: help vendor shell site-config site-config-check elm-dev elm-build elm-test elm-check elm-format elm-tailwind-gen pb-hook-test pb-migration-check photo-pipeline-test crop-gesture-test statics-build statics statics-test dist build test check clean
 
 help: ## List available commands
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | sort | awk 'BEGIN {FS = ":.*?## "}; {printf "%-22s %s\n", $$1, $$2}'
@@ -38,6 +38,10 @@ pb-migration-check: ## Syntax-check the list photo migration
 photo-pipeline-test: ## Test thumbnail sizing and metadata stripping
 	node --test elm-app/photo-pipeline.test.mjs
 
+.PHONY: crop-gesture-test
+crop-gesture-test: ## Test cover crop pointer, touch, and wheel gesture handling
+	node --test elm-app/crop-gestures.test.mjs
+
 .PHONY: elm-tailwind-gen
 elm-tailwind-gen: elm-app/.elm-tailwind/.stamp ## Generate typed Tailwind Elm modules for shared UI components
 
@@ -74,7 +78,7 @@ statics-test: ## This intentionally small static generator has no separate tests
 dist build: elm-build statics ## Build SPA assets and run the no-op statics target
 
 .PHONY: test
-test: elm-test pb-hook-test pb-migration-check photo-pipeline-test statics-test ## Run application tests
+test: elm-test pb-hook-test pb-migration-check photo-pipeline-test crop-gesture-test statics-test ## Run application tests
 
 .PHONY: check
 check: elm-check ## Run formatting and site configuration checks

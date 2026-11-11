@@ -19,15 +19,17 @@ import Component.Toast as Toast
 import Dict exposing (Dict)
 import FeatherIcons
 import File
-import Html exposing (Html, a, button, div, fieldset, h1, h2, h3, header, img, input, label, li, main_, p, section, span, text, textarea, ul)
-import Html.Attributes exposing (alt, attribute, checked, class, disabled, href, id, placeholder, src, target, type_, value)
+import Html exposing (Html, a, button, div, fieldset, h1, h2, h3, header, img, input, label, legend, li, main_, p, section, span, text, textarea, ul)
+import Html.Attributes exposing (alt, attribute, checked, class, disabled, for, href, id, placeholder, src, style, target, type_, value)
 import Html.Events exposing (on, onCheck, onClick, onInput, preventDefaultOn)
 import Http
+import ItemOrder
 import Json.Decode as Decode
 import Lang
 import Markdown.Parser
 import Markdown.Renderer
 import MarkdownSafety
+import PhotoCrop
 import PocketBaseAuth exposing (AuthState(..), AuthUser, getToken)
 import QRCode
 import Route
@@ -67,11 +69,13 @@ type alias Model =
     , codeDrafts : Dict Int String
     , openSetIndex : Maybe Int
     , draggingSetIndex : Maybe Int
+    , dropGap : Maybe Int
     , editorTab : EditorTab
     , lookupRequestId : Int
     , markdownPreviewIds : List String
     , saving : Bool
     , photoUploadState : PhotoUploadState
+    , photoCrop : Maybe PhotoCrop.State
     , photoFileToken : Maybe String
     , notice : Maybe String
     , confirmDelete : Bool
@@ -106,6 +110,8 @@ type EditorTab
 
 type PhotoUploadState
     = PhotoReady
+    | PhotoPreparing
+    | PhotoCropping
     | PhotoUploading
     | PhotoRemoving
     | PhotoUploaded
@@ -148,6 +154,15 @@ type alias ListPhotoResult =
     }
 
 
+type alias ListPhotoPreparedResult =
+    { listId : String
+    , previewUrl : String
+    , width : Int
+    , height : Int
+    , error : String
+    }
+
+
 type alias ListPhotoClearedResult =
     { listId : String
     , error : String
@@ -157,6 +172,19 @@ type alias ListPhotoClearedResult =
 type alias PhotoFileTokenResult =
     { listId : String
     , token : String
+    }
+
+
+{-| A pointer or wheel gesture over the crop frame, in preview-frame fractions. `pan` uses `dx` and
+`dy`; `zoom` uses `factor` around `x` and `y`.
+-}
+type alias CropGesture =
+    { kind : String
+    , dx : Float
+    , dy : Float
+    , factor : Float
+    , x : Float
+    , y : Float
     }
 
 
@@ -186,6 +214,15 @@ type Msg
     | SetSearchChanged Int String
     | SetSearchKeyPressed Int String
     | ListPhotoSelected String
+    | ListPhotoPrepared ListPhotoPreparedResult
+    | PhotoCropRatioSelected PhotoCrop.CoverRatio
+    | PhotoCropZoomChanged String
+    | PhotoCropFocusXChanged String
+    | PhotoCropFocusYChanged String
+    | PhotoCropGestured CropGesture
+    | PhotoCropKeyPressed String
+    | PhotoCropCancelClicked
+    | PhotoCropApplyClicked
     | ListPhotoProcessed ListPhotoResult
     | ListPhotoClearClicked
     | ListPhotoCleared ListPhotoClearedResult
@@ -213,6 +250,7 @@ type Msg
     | ToggleService Int Service Bool
     | ToggleSetAccordion Int
     | SetDragStarted Int
+    | SetDropGapChanged Int
     | SetDragDropped Int
     | SetDragEnded
     | AddSet
@@ -268,7 +306,22 @@ port processSetThumbnail : { index : Int, requestId : Int, code : String, imageU
 port setThumbnailProcessed : (SetThumbnailProcessed -> msg) -> Sub msg
 
 
-port processListPhoto : { inputId : String, listId : String, pbBaseUrl : String, token : String } -> Cmd msg
+port prepareListPhoto : { inputId : String, listId : String } -> Cmd msg
+
+
+port listPhotoPrepared : (ListPhotoPreparedResult -> msg) -> Sub msg
+
+
+port cancelListPhotoPreparation : { listId : String } -> Cmd msg
+
+
+port applyListPhoto :
+    { listId : String
+    , pbBaseUrl : String
+    , token : String
+    , crop : PhotoCrop.CropRegion
+    }
+    -> Cmd msg
 
 
 port listPhotoProcessed : (ListPhotoResult -> msg) -> Sub msg
@@ -284,6 +337,9 @@ port requestListPhotoFileToken : { listId : String, pbBaseUrl : String, token : 
 
 
 port listPhotoFileTokenReceived : (PhotoFileTokenResult -> msg) -> Sub msg
+
+
+port cropGesture : (CropGesture -> msg) -> Sub msg
 
 
 main : Program Flags Model Msg
@@ -337,11 +393,13 @@ init flags url key =
       , codeDrafts = Dict.empty
       , openSetIndex = Nothing
       , draggingSetIndex = Nothing
+      , dropGap = Nothing
       , editorTab = ItemsTab
       , lookupRequestId = 0
       , markdownPreviewIds = []
       , saving = False
       , photoUploadState = PhotoReady
+      , photoCrop = Nothing
       , photoFileToken = Nothing
       , notice = Nothing
       , confirmDelete = False
@@ -399,16 +457,25 @@ subscriptions model =
         , localPasswordLoginResult LocalPasswordLoginCompleted
         , setSearchReady SetSearchReady
         , setThumbnailProcessed SetSuggestionThumbnailProcessed
+        , listPhotoPrepared ListPhotoPrepared
         , listPhotoProcessed ListPhotoProcessed
         , listPhotoCleared ListPhotoCleared
         , listPhotoFileTokenReceived PhotoFileTokenReceived
+        , if model.photoUploadState == PhotoCropping then
+            cropGesture PhotoCropGestured
+
+          else
+            Sub.none
         , Layout.subscriptions { isOpen = model.menuOpen, onClose = CloseMenu }
         , case model.route of
             Route.EditList _ ->
                 Browser.Events.onKeyDown
                     (Decode.map3
                         (\ctrlKey key targetId ->
-                            if
+                            if key == "Escape" && model.photoUploadState == PhotoCropping then
+                                PhotoCropCancelClicked
+
+                            else if
                                 key
                                     == "Escape"
                                     && not model.confirmDelete
@@ -493,12 +560,12 @@ update msg model =
                     requiresAuth route && getToken model.auth == Nothing
             in
             if isProtected then
-                ( { model | url = url, route = Route.Home, ownedLists = NotLoaded, accumulatedLists = [], currentList = NotLoaded, setSearchQueries = Dict.empty, setSearchStates = Dict.empty, activeSuggestions = Dict.empty, codeDrafts = Dict.empty, openSetIndex = Nothing, draggingSetIndex = Nothing, editorTab = ItemsTab, photoUploadState = PhotoReady, photoFileToken = Nothing, confirmDelete = False, menuOpen = False }
+                ( { model | url = url, route = Route.Home, ownedLists = NotLoaded, accumulatedLists = [], currentList = NotLoaded, setSearchQueries = Dict.empty, setSearchStates = Dict.empty, activeSuggestions = Dict.empty, codeDrafts = Dict.empty, openSetIndex = Nothing, draggingSetIndex = Nothing, dropGap = Nothing, editorTab = ItemsTab, photoUploadState = PhotoReady, photoCrop = Nothing, photoFileToken = Nothing, confirmDelete = False, menuOpen = False }
                 , Nav.pushUrl model.key "#/"
                 )
 
             else
-                ( { model | url = url, route = route, ownedLists = loaded.ownedLists, accumulatedLists = [], currentList = loaded.currentList, form = loaded.form, setSearchQueries = Dict.empty, setSearchStates = Dict.empty, activeSuggestions = Dict.empty, codeDrafts = Dict.empty, openSetIndex = Nothing, draggingSetIndex = Nothing, editorTab = ItemsTab, photoUploadState = PhotoReady, photoFileToken = Nothing, confirmDelete = False, menuOpen = False }
+                ( { model | url = url, route = route, ownedLists = loaded.ownedLists, accumulatedLists = [], currentList = loaded.currentList, form = loaded.form, setSearchQueries = Dict.empty, setSearchStates = Dict.empty, activeSuggestions = Dict.empty, codeDrafts = Dict.empty, openSetIndex = Nothing, draggingSetIndex = Nothing, dropGap = Nothing, editorTab = ItemsTab, photoUploadState = PhotoReady, photoCrop = Nothing, photoFileToken = Nothing, confirmDelete = False, menuOpen = False }
                 , Cmd.batch
                     [ loaded.cmd
                     , Task.attempt (\_ -> NoOp) (Dom.focus "main-content")
@@ -627,6 +694,7 @@ update msg model =
                                 , photoFileToken = Nothing
                                 , openSetIndex = Nothing
                                 , draggingSetIndex = Nothing
+                                , dropGap = Nothing
                               }
                             , case ( record.photo, getToken model.auth ) of
                                 ( Just _, Just token ) ->
@@ -649,14 +717,103 @@ update msg model =
                         ( model, Cmd.none )
 
                     else
-                        ( { model | photoUploadState = PhotoUploading }
-                        , processListPhoto
+                        ( { model | photoUploadState = PhotoPreparing }
+                        , prepareListPhoto
                             { inputId = "list-photo-input"
                             , listId = listId
-                            , pbBaseUrl = model.pbBaseUrl
-                            , token = token
                             }
                         )
+
+                _ ->
+                    ( model, Cmd.none )
+
+        ListPhotoPrepared result ->
+            case ( model.route, model.currentList ) of
+                ( Route.EditList (Just routeId), Loaded record ) ->
+                    if routeId /= result.listId || record.id /= result.listId || model.photoUploadState /= PhotoPreparing then
+                        ( model, Cmd.none )
+
+                    else if result.error /= "" then
+                        ( { model | photoUploadState = PhotoUploadFailed (photoUploadErrorMessage result.error) }, Cmd.none )
+
+                    else
+                        ( { model
+                            | photoCrop = Just (PhotoCrop.initialState result.listId result.previewUrl result.width result.height)
+                            , photoUploadState = PhotoCropping
+                          }
+                        , Cmd.none
+                        )
+
+                _ ->
+                    ( model, Cmd.none )
+
+        PhotoCropRatioSelected ratio ->
+            updatePhotoCrop model (\crop -> { crop | ratio = ratio })
+
+        PhotoCropZoomChanged value ->
+            updatePhotoCrop model (\crop -> { crop | zoom = String.toFloat value |> Maybe.withDefault crop.zoom })
+
+        PhotoCropFocusXChanged value ->
+            updatePhotoCrop model (\crop -> { crop | focusX = String.toFloat value |> Maybe.withDefault crop.focusX })
+
+        PhotoCropFocusYChanged value ->
+            updatePhotoCrop model (\crop -> { crop | focusY = String.toFloat value |> Maybe.withDefault crop.focusY })
+
+        PhotoCropGestured gesture ->
+            if gesture.kind == "pan" then
+                updatePhotoCrop model (PhotoCrop.panBy gesture.dx gesture.dy)
+
+            else if gesture.kind == "zoom" then
+                updatePhotoCrop model (PhotoCrop.zoomAt gesture.factor gesture.x gesture.y)
+
+            else
+                ( model, Cmd.none )
+
+        PhotoCropKeyPressed key ->
+            case photoCropKey key of
+                Just (CropPan dx dy) ->
+                    updatePhotoCrop model (PhotoCrop.panBy dx dy)
+
+                Just (CropZoom factor) ->
+                    updatePhotoCrop model (PhotoCrop.zoomAt factor 0.5 0.5)
+
+                Nothing ->
+                    ( model, Cmd.none )
+
+        PhotoCropCancelClicked ->
+            case model.photoCrop of
+                Just crop ->
+                    if model.photoUploadState == PhotoCropping then
+                        ( { model | photoCrop = Nothing, photoUploadState = PhotoReady }
+                        , cancelListPhotoPreparation { listId = crop.listId }
+                        )
+
+                    else
+                        ( model, Cmd.none )
+
+                Nothing ->
+                    ( model, Cmd.none )
+
+        PhotoCropApplyClicked ->
+            case ( model.route, model.currentList ) of
+                ( Route.EditList (Just routeId), Loaded record ) ->
+                    case ( model.photoCrop, getToken model.auth ) of
+                        ( Just crop, Just token ) ->
+                            if routeId /= record.id || record.id /= crop.listId || model.photoUploadState /= PhotoCropping then
+                                ( model, Cmd.none )
+
+                            else
+                                ( { model | photoCrop = Nothing, photoUploadState = PhotoUploading }
+                                , applyListPhoto
+                                    { listId = record.id
+                                    , pbBaseUrl = model.pbBaseUrl
+                                    , token = token
+                                    , crop = PhotoCrop.cropRegion crop
+                                    }
+                                )
+
+                        _ ->
+                            ( model, Cmd.none )
 
                 _ ->
                     ( model, Cmd.none )
@@ -1245,22 +1402,37 @@ update msg model =
             )
 
         SetDragStarted index ->
-            ( { model | draggingSetIndex = Just index }, Cmd.none )
+            ( { model | draggingSetIndex = Just index, dropGap = Nothing }, Cmd.none )
 
-        SetDragDropped targetIndex ->
+        SetDropGapChanged gap ->
+            case model.draggingSetIndex of
+                Just _ ->
+                    ( { model | dropGap = Just gap }, Cmd.none )
+
+                Nothing ->
+                    ( model, Cmd.none )
+
+        SetDragDropped gap ->
             case model.draggingSetIndex of
                 Just fromIndex ->
-                    if fromIndex < 0 || fromIndex >= List.length model.form.items || targetIndex < 0 || targetIndex >= List.length model.form.items then
-                        ( { model | draggingSetIndex = Nothing }, Cmd.none )
+                    let
+                        count =
+                            List.length model.form.items
+
+                        cleared =
+                            { model | draggingSetIndex = Nothing, dropGap = Nothing }
+                    in
+                    if fromIndex < 0 || fromIndex >= count || gap < 0 || gap > count || ItemOrder.targetIndex fromIndex gap == fromIndex then
+                        ( cleared, Cmd.none )
 
                     else
-                        update (MoveSet fromIndex targetIndex) { model | draggingSetIndex = Nothing }
+                        update (MoveSet fromIndex (ItemOrder.targetIndex fromIndex gap)) cleared
 
                 Nothing ->
                     ( model, Cmd.none )
 
         SetDragEnded ->
-            ( { model | draggingSetIndex = Nothing }, Cmd.none )
+            ( { model | draggingSetIndex = Nothing, dropGap = Nothing }, Cmd.none )
 
         AddSet ->
             let
@@ -1324,7 +1496,7 @@ update msg model =
         MoveSet from to ->
             let
                 updated =
-                    mapForm (\form -> { form | items = moveItem from to form.items }) model
+                    mapForm (\form -> { form | items = ItemOrder.moveItem from to form.items }) model
             in
             ( { updated | setSearchQueries = Dict.empty, setSearchStates = Dict.empty, activeSuggestions = Dict.empty, codeDrafts = Dict.empty, openSetIndex = moveOpenSetIndex from to model.openSetIndex }, Cmd.none )
 
@@ -1468,28 +1640,6 @@ updateAt index transform values =
                 value
         )
         values
-
-
-moveItem : Int -> Int -> List a -> List a
-moveItem from to values =
-    case List.drop from values |> List.head of
-        Nothing ->
-            values
-
-        Just item ->
-            let
-                remaining =
-                    List.take from values ++ List.drop (from + 1) values
-
-                safePosition =
-                    clamp 0 (List.length remaining) to
-            in
-            List.take safePosition remaining ++ [ item ] ++ List.drop safePosition remaining
-
-
-clamp : Int -> Int -> Int -> Int
-clamp low high value =
-    max low (min high value)
 
 
 moveOpenSetIndex : Int -> Int -> Maybe Int -> Maybe Int
@@ -2431,6 +2581,12 @@ viewListPhotoEditor model maybeId =
                 PhotoReady ->
                     text ""
 
+                PhotoPreparing ->
+                    p [ id "list-photo-status", attribute "role" "status", attribute "aria-live" "polite", class "type-caption text-text-muted" ] [ text "Kansikuvaa valmistellaan…" ]
+
+                PhotoCropping ->
+                    p [ id "list-photo-status", attribute "role" "status", attribute "aria-live" "polite", class "type-caption text-text-muted" ] [ text "Rajaa kansikuva alla olevilla valinnoilla ja tallenna se." ]
+
                 PhotoUploading ->
                     p [ id "list-photo-status", attribute "role" "status", attribute "aria-live" "polite", class "type-caption text-text-muted" ] [ text "Kansikuvaa käsitellään ja tallennetaan…" ]
 
@@ -2466,10 +2622,16 @@ viewListPhotoEditor model maybeId =
                     "Tallenna lista ensin, avaa se muokattavaksi ja lisää sitten kansikuva."
 
                  else
-                    "Valokuva pienennetään 256 pikseliin ja tallennetaan WebP-kuvana (enintään 200 kt). Enimmäiskoko ennen käsittelyä on 20 Mt."
+                    "Valitse kuva, rajaa se kuvasuhteen ja zoomauksen avulla. Rajattu kuva pienennetään enintään 256 pikseliin ja tallennetaan WebP-kuvana (enintään 200 kt). Enimmäiskoko ennen käsittelyä on 20 Mt."
                 )
             ]
         , statusView
+        , case ( model.photoUploadState, model.photoCrop ) of
+            ( PhotoCropping, Just crop ) ->
+                photoCropPanel crop
+
+            _ ->
+                text ""
         , if hasPhoto then
             div [ class "flex flex-wrap items-start gap-3" ]
                 [ case maybePhotoUrl of
@@ -2499,9 +2661,214 @@ viewListPhotoEditor model maybeId =
         ]
 
 
+photoCropPanel : PhotoCrop.State -> Html Msg
+photoCropPanel crop =
+    let
+        region =
+            PhotoCrop.cropRegion crop
+
+        output =
+            PhotoCrop.outputSize region
+
+        sourceWidth =
+            toFloat crop.sourceWidth
+
+        sourceHeight =
+            toFloat crop.sourceHeight
+
+        selectionStyles =
+            [ style "left" (percentOf (toFloat region.x / sourceWidth * 100))
+            , style "top" (percentOf (toFloat region.y / sourceHeight * 100))
+            , style "width" (percentOf (toFloat region.width / sourceWidth * 100))
+            , style "height" (percentOf (toFloat region.height / sourceHeight * 100))
+            ]
+
+        ratioOption ratio =
+            label
+                [ class "flex min-h-11 cursor-pointer items-center gap-2 rounded border border-border-default bg-white px-3 py-2 type-body-small has-[:checked]:border-brand has-[:checked]:bg-bg-subtle has-[:focus-visible]:ring-2 has-[:focus-visible]:ring-brand" ]
+                [ input
+                    [ type_ "radio"
+                    , attribute "name" "list-photo-crop-ratio"
+                    , value (PhotoCrop.ratioId ratio)
+                    , checked (crop.ratio == ratio)
+                    , onCheck (\_ -> PhotoCropRatioSelected ratio)
+                    , class "h-5 w-5 shrink-0"
+                    ]
+                    []
+                , text (PhotoCrop.ratioLabel ratio)
+                ]
+    in
+    section [ id "list-photo-crop", class "space-y-4 rounded-lg border border-border-default bg-white p-4", attribute "aria-labelledby" "list-photo-crop-title" ]
+        [ h3 [ id "list-photo-crop-title", class "type-h4" ] [ text "Rajaa kansikuva" ]
+        , div
+            [ class "relative mx-auto w-full max-w-sm touch-none select-none overflow-hidden rounded bg-bg-subtle cursor-grab active:cursor-grabbing focus-visible:outline focus-visible:outline-2 focus-visible:outline-brand"
+            , style "aspect-ratio" (String.fromInt crop.sourceWidth ++ " / " ++ String.fromInt crop.sourceHeight)
+            , attribute "data-crop-frame" ""
+            , attribute "role" "group"
+            , attribute "tabindex" "0"
+            , attribute "aria-label" "Kansikuvan rajausalue"
+            , attribute "aria-describedby" "list-photo-crop-hint"
+            , preventDefaultOn "keydown" cropFrameKeyDecoder
+            ]
+            [ img
+                [ src crop.previewUrl
+                , alt "Kansikuvan esikatselu rajausalueineen"
+                , attribute "draggable" "false"
+                , class "block h-full w-full select-none"
+                ]
+                []
+            , div
+                ([ attribute "aria-hidden" "true"
+                 , class "pointer-events-none absolute border-2 border-white"
+                 , style "box-shadow" "0 0 0 9999px rgba(0, 0, 0, 0.5)"
+                 ]
+                    ++ selectionStyles
+                )
+                []
+            ]
+        , p [ id "list-photo-crop-hint", class "type-caption text-text-muted" ]
+            [ text "Vedä kuvaa siirtääksesi rajausta. Zoomaa nipistämällä tai hiiren rullalla. Kehyksen ollessa valittuna nuolinäppäimet siirtävät ja + ja - zoomaavat."
+            ]
+        , fieldset [ class "space-y-2" ]
+            [ legend [ class "type-body-small font-semibold" ] [ text "Kuvasuhde" ]
+            , div [ class "grid grid-cols-1 gap-2 sm:grid-cols-2" ] (List.map ratioOption PhotoCrop.allRatios)
+            , p [ id "list-photo-crop-size", attribute "aria-live" "polite", class "type-caption text-text-muted" ]
+                [ text ("Tallennettava koko: " ++ String.fromInt output.width ++ " × " ++ String.fromInt output.height ++ " px, WebP, enintään 200 kt.") ]
+            ]
+        , cropSlider
+            { fieldId = "list-photo-crop-zoom"
+            , labelText = "Zoomaus"
+            , valueText = String.fromInt (round (crop.zoom * 100)) ++ " %"
+            , minValue = PhotoCrop.minZoom
+            , maxValue = PhotoCrop.maxZoom
+            , step = 0.01
+            , current = crop.zoom
+            , toMsg = PhotoCropZoomChanged
+            }
+        , cropSlider
+            { fieldId = "list-photo-crop-focus-x"
+            , labelText = "Vaakasuuntainen sijainti"
+            , valueText = String.fromInt (round (crop.focusX * 100)) ++ " %"
+            , minValue = 0
+            , maxValue = 1
+            , step = 0.01
+            , current = crop.focusX
+            , toMsg = PhotoCropFocusXChanged
+            }
+        , cropSlider
+            { fieldId = "list-photo-crop-focus-y"
+            , labelText = "Pystysuuntainen sijainti"
+            , valueText = String.fromInt (round (crop.focusY * 100)) ++ " %"
+            , minValue = 0
+            , maxValue = 1
+            , step = 0.01
+            , current = crop.focusY
+            , toMsg = PhotoCropFocusYChanged
+            }
+        , div [ class "flex flex-wrap items-center gap-3" ]
+            [ button
+                [ type_ "button"
+                , onClick PhotoCropCancelClicked
+                , class "inline-flex min-h-11 items-center justify-center rounded border border-brand bg-white px-4 py-2 type-body-small font-semibold text-brand hover:bg-bg-subtle focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand"
+                ]
+                [ text "Peruuta" ]
+            , sharedButton "Tallenna kansikuva" PhotoCropApplyClicked Button.Primary False False
+            ]
+        ]
+
+
+cropSlider :
+    { fieldId : String
+    , labelText : String
+    , valueText : String
+    , minValue : Float
+    , maxValue : Float
+    , step : Float
+    , current : Float
+    , toMsg : String -> Msg
+    }
+    -> Html Msg
+cropSlider config =
+    div [ class "space-y-1" ]
+        [ label [ for config.fieldId, class "block type-body-small" ]
+            [ text (config.labelText ++ ": " ++ config.valueText) ]
+        , input
+            [ type_ "range"
+            , id config.fieldId
+            , attribute "min" (String.fromFloat config.minValue)
+            , attribute "max" (String.fromFloat config.maxValue)
+            , attribute "step" (String.fromFloat config.step)
+            , value (String.fromFloat config.current)
+            , onInput config.toMsg
+            , class "block min-h-11 w-full"
+            ]
+            []
+        ]
+
+
+percentOf : Float -> String
+percentOf value =
+    String.fromFloat value ++ "%"
+
+
+updatePhotoCrop : Model -> (PhotoCrop.State -> PhotoCrop.State) -> ( Model, Cmd Msg )
+updatePhotoCrop model change =
+    case ( model.photoUploadState, model.photoCrop ) of
+        ( PhotoCropping, Just crop ) ->
+            ( { model | photoCrop = Just (change crop) }, Cmd.none )
+
+        _ ->
+            ( model, Cmd.none )
+
+
+type PhotoCropKey
+    = CropPan Float Float
+    | CropZoom Float
+
+
+photoCropKey : String -> Maybe PhotoCropKey
+photoCropKey key =
+    case key of
+        "ArrowLeft" ->
+            Just (CropPan -0.1 0)
+
+        "ArrowRight" ->
+            Just (CropPan 0.1 0)
+
+        "ArrowUp" ->
+            Just (CropPan 0 -0.1)
+
+        "ArrowDown" ->
+            Just (CropPan 0 0.1)
+
+        "+" ->
+            Just (CropZoom 1.1)
+
+        "=" ->
+            Just (CropZoom 1.1)
+
+        "-" ->
+            Just (CropZoom (1 / 1.1))
+
+        _ ->
+            Nothing
+
+
+cropFrameKeyDecoder : Decode.Decoder ( Msg, Bool )
+cropFrameKeyDecoder =
+    Decode.field "key" Decode.string
+        |> Decode.map (\key -> ( PhotoCropKeyPressed key, photoCropKey key /= Nothing ))
+
+
 photoActionInProgress : PhotoUploadState -> Bool
 photoActionInProgress state =
     case state of
+        PhotoPreparing ->
+            True
+
+        PhotoCropping ->
+            True
+
         PhotoUploading ->
             True
 
@@ -2610,7 +2977,7 @@ viewEditSets model =
             p [ class "rounded border border-border-default p-4 type-caption text-text-muted" ] [ text "Listalla ei ole vielä kohteita." ]
 
           else
-            div [ class "space-y-3" ] (List.indexedMap (viewEditSet model model.markdownPreviewIds model.form.items) model.form.items)
+            div [ class "space-y-3" ] (List.indexedMap (viewEditSetRow model model.markdownPreviewIds model.form.items) model.form.items)
         ]
 
 
@@ -2850,9 +3217,13 @@ viewEditSet model previewIds items index item =
             "edit-set-" ++ String.fromInt index
     in
     section
-        [ class "overflow-hidden rounded-lg border border-border-default bg-white"
-        , preventDefaultOn "dragover" (Decode.succeed ( NoOp, True ))
-        , preventDefaultOn "drop" (Decode.succeed ( SetDragDropped index, True ))
+        [ class
+            (if model.draggingSetIndex == Just index then
+                "overflow-hidden rounded-lg border border-border-default bg-white opacity-60"
+
+             else
+                "overflow-hidden rounded-lg border border-border-default bg-white"
+            )
         ]
         [ div [ class "flex flex-wrap items-center gap-2 p-3" ]
             [ span
@@ -2958,6 +3329,57 @@ viewEditSet model previewIds items index item =
           else
             text ""
         ]
+
+
+viewEditSetRow : Model -> List String -> List SetItem -> Int -> SetItem -> Html Msg
+viewEditSetRow model previewIds items index item =
+    div [ class "relative" ]
+        (viewEditSet model previewIds items index item :: viewDropZones model index (List.length items))
+
+
+{-| While a row is dragged, the top and bottom halves of every row accept a drop into the gap they
+border. The gap that would change the order shows a line on its edge.
+-}
+viewDropZones : Model -> Int -> Int -> List (Html Msg)
+viewDropZones model index count =
+    case model.draggingSetIndex of
+        Nothing ->
+            []
+
+        Just fromIndex ->
+            let
+                dropZone : Bool -> Int -> Html Msg
+                dropZone isTop gap =
+                    let
+                        showLine =
+                            model.dropGap
+                                == Just gap
+                                && ItemOrder.targetIndex fromIndex gap
+                                /= fromIndex
+                                && (isTop || gap == count)
+
+                        edgeClass =
+                            if isTop then
+                                "top-0"
+
+                            else
+                                "bottom-0"
+                    in
+                    div
+                        [ class ("absolute inset-x-0 z-10 h-1/2 " ++ edgeClass)
+                        , preventDefaultOn "dragover" (Decode.succeed ( SetDropGapChanged gap, True ))
+                        , preventDefaultOn "drop" (Decode.succeed ( SetDragDropped gap, True ))
+                        ]
+                        (if showLine then
+                            [ div [ class ("absolute inset-x-0 z-20 h-1 rounded bg-brand " ++ edgeClass), attribute "aria-hidden" "true" ] [] ]
+
+                         else
+                            []
+                        )
+            in
+            [ dropZone True index
+            , dropZone False (index + 1)
+            ]
 
 
 viewSetSearch : Model -> Int -> SetItem -> Html Msg
