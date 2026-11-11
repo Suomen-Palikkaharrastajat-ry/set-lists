@@ -1903,7 +1903,7 @@ viewListDetail model owned record =
 
           else
             text ""
-        , div [ class "flex flex-wrap items-start justify-between gap-4" ]
+        , div [ class "print-title flex flex-wrap items-start justify-between gap-4" ]
             ([ div [ class "min-w-0 flex-1 flow-root" ]
                 [ viewListPhoto model record
                 , h1 [ class "type-h1" ] [ text record.title ]
