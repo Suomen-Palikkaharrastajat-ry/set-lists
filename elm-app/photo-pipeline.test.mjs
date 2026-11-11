@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { stripWebpMetadata, thumbnailDimensions } from './photo-pipeline.mjs'
+import { encodeLosslessWebp, stripWebpMetadata, thumbnailDimensions } from './photo-pipeline.mjs'
 
 function webpChunk(type, payload) {
   const size = payload.length
@@ -67,4 +67,43 @@ test('WebP sanitizing removes EXIF and other metadata chunks and clears feature 
 
 test('WebP sanitizing rejects malformed input', async () => {
   await assert.rejects(stripWebpMetadata(new Blob([ 'not an image' ])), /Invalid WebP image/)
+})
+
+function readBits(bytes, bitOffset, count) {
+  let value = 0
+  for (let bit = 0; bit < count; bit++) {
+    const position = bitOffset + bit
+    value |= ((bytes[position >> 3] >> (position & 7)) & 1) << bit
+  }
+  return value
+}
+
+test('lossless WebP fallback writes a VP8L image with the requested dimensions', async () => {
+  const width = 3
+  const height = 2
+  const rgba = new Uint8ClampedArray(width * height * 4).fill(255)
+  const bytes = new Uint8Array(await encodeLosslessWebp(width, height, rgba).arrayBuffer())
+  const view = new DataView(bytes.buffer)
+
+  assert.equal(new TextDecoder().decode(bytes.slice(0, 4)), 'RIFF')
+  assert.equal(new TextDecoder().decode(bytes.slice(8, 16)), 'WEBPVP8L')
+  assert.equal(view.getUint32(4, true), bytes.length - 8)
+  assert.equal(view.getUint32(16, true), bytes.length - 20)
+  assert.equal(bytes[20], 0x2f)
+  assert.equal(readBits(bytes, 168, 14) + 1, width)
+  assert.equal(readBits(bytes, 182, 14) + 1, height)
+  const sanitized = await stripWebpMetadata(encodeLosslessWebp(width, height, rgba))
+  assert.deepEqual(webpChunks(new Uint8Array(await sanitized.arrayBuffer())), [ 'VP8L' ])
+})
+
+test('lossless WebP fallback stays under the thumbnail limit for the largest thumbnail', () => {
+  const rgba = new Uint8ClampedArray(256 * 256 * 4)
+  for (let i = 0; i < rgba.length; i++) rgba[i] = (i * 2654435761) >>> 24
+  assert.ok(encodeLosslessWebp(256, 256, rgba).size <= 200_000)
+})
+
+test('lossless WebP fallback rejects invalid dimensions and pixel data', () => {
+  assert.throws(() => encodeLosslessWebp(0, 1, new Uint8ClampedArray(4)), /Invalid image dimensions/)
+  assert.throws(() => encodeLosslessWebp(1.5, 1, new Uint8ClampedArray(4)), /Invalid image dimensions/)
+  assert.throws(() => encodeLosslessWebp(2, 1, new Uint8ClampedArray(4)), /Invalid pixel data/)
 })

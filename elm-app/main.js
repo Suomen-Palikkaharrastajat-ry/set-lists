@@ -3,7 +3,7 @@ import { Elm } from './src/Main.elm'
 import siteConfig from 'virtual:site-config'
 import { getInitAuth, wirePocketBaseAuthPorts, triggerBackgroundAuthRefresh } from './packages/app-toolkit/js/pocketbase-auth.js'
 import { appSettings, pickLang, showLanguage } from './packages/site-config/browser.mjs'
-import { stripWebpMetadata, thumbnailDimensions } from './photo-pipeline.mjs'
+import { encodeLosslessWebp, stripWebpMetadata, thumbnailDimensions } from './photo-pipeline.mjs'
 
 const settings = appSettings(siteConfig, pickLang(siteConfig))
 const pbBaseUrl = import.meta.env.VITE_POCKETBASE_URL || settings.pocketbase_url
@@ -93,10 +93,19 @@ async function encodeWebpThumbnail(sourceBlob, maxSourceBytes) {
     const context = canvas.getContext('2d')
     if (!context) throw new Error('Canvas unavailable')
     context.drawImage(image, 0, 0, canvas.width, canvas.height)
-    const encoded = await new Promise((resolve) => canvas.toBlob(resolve, 'image/webp', 0.82))
-    if (!encoded || encoded.type !== 'image/webp') throw new Error('WebP conversion failed')
+    let encoded = null
+    if (typeof canvas.toBlob === 'function') {
+      try {
+        encoded = await new Promise((resolve) => canvas.toBlob(resolve, 'image/webp', 0.82))
+      } catch (_) {
+        // Use the bounded lossless encoder when the browser cannot encode a canvas to WebP.
+      }
+    }
+    const webp = encoded?.type === 'image/webp'
+      ? encoded
+      : encodeLosslessWebp(canvas.width, canvas.height, context.getImageData(0, 0, canvas.width, canvas.height).data)
 
-    const sanitized = await stripWebpMetadata(encoded)
+    const sanitized = await stripWebpMetadata(webp)
     if (sanitized.size === 0 || sanitized.size > MAX_THUMBNAIL_BYTES) throw new Error('WebP thumbnail is too large')
     return sanitized
   } finally {
