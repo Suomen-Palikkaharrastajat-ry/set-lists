@@ -2185,6 +2185,15 @@ viewSet catalogsByCode index item =
                                 item.title
                             )
                         ]
+                    , case item.kind of
+                        AltBuild ->
+                            span [ class "ml-2 inline-flex items-center rounded bg-bg-subtle px-2 py-0.5 type-caption text-text-muted" ] [ text "ALT" ]
+
+                        Moc ->
+                            span [ class "ml-2 inline-flex items-center rounded bg-bg-subtle px-2 py-0.5 type-caption text-text-muted" ] [ text "MOC" ]
+
+                        Set ->
+                            text ""
                     , case MarkdownSafety.safeWebUrl item.url of
                         Just safeUrl ->
                             a [ href safeUrl, target "_blank", attribute "rel" "noopener noreferrer", class "ml-3 inline-block text-brand underline" ] [ text "Lisätietoja" ]
@@ -2196,7 +2205,11 @@ viewSet catalogsByCode index item =
                 , viewItemMarkdown item.description
                 ]
             , if List.isEmpty item.codes then
-                p [ class "mt-2 type-caption text-text-muted" ] [ text "Ei setin tunnuksia" ]
+                if item.kind == Moc then
+                    text ""
+
+                else
+                    p [ class "mt-2 type-caption text-text-muted" ] [ text "Ei setin tunnuksia" ]
 
               else
                 div [ class "mt-3 space-y-3" ] (List.map (viewCodeLinks item.services catalogsByCode) item.codes)
