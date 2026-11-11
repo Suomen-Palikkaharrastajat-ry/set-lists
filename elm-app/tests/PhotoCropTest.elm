@@ -64,18 +64,18 @@ suite =
             \_ ->
                 PhotoCrop.outputSize { x = 0, y = 0, width = 90, height = 120 }
                     |> Expect.equal { width = 90, height = 120 }
-        , test "Given a drag of a tenth of the frame at two times zoom, when the crop pans, then the region moves the opposite way by the same share of the visible area" <|
+        , test "Given a drag of a tenth of the frame at two times zoom, when the crop pans right, then the selected region follows to the right" <|
             \_ ->
                 { landscape | zoom = 2 }
                     |> PhotoCrop.panBy 0.1 0
                     |> PhotoCrop.cropRegion
-                    |> Expect.equal { x = 330, y = 225, width = 450, height = 450 }
-        , test "Given a drag past the photo edge, when the crop pans, then the focus stays at the edge" <|
+                    |> Expect.equal { x = 420, y = 225, width = 450, height = 450 }
+        , test "Given a drag past the photo's left edge, when the crop pans, then the focus stays at the left edge" <|
             \_ ->
                 { landscape | zoom = 2 }
                     |> PhotoCrop.panBy -1 0
                     |> PhotoCrop.cropRegion
-                    |> Expect.equal { x = 750, y = 225, width = 450, height = 450 }
+                    |> Expect.equal { x = 0, y = 225, width = 450, height = 450 }
         , test "Given an axis that is fully visible, when the crop pans along it, then its focus does not change" <|
             \_ ->
                 PhotoCrop.panBy 0 0.5 landscape

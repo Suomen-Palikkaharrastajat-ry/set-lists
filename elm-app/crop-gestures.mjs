@@ -88,7 +88,7 @@ export function createCropGestureTracker() {
       ]
       if (previousPinch.distance > 0 && dist > 0) {
         const at = fractionOf(rect, mid)
-        messages.push(zoom(dist / previousPinch.distance, at.x, at.y))
+        messages.push(zoom(previousPinch.distance / dist, at.x, at.y))
       }
       return messages
     },

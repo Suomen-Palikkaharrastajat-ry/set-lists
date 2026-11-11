@@ -35,14 +35,14 @@ test('one pointer dragged across the frame pans by its movement as a share of th
   ])
 })
 
-test('two pointers pinching apart zoom by their distance ratio around their midpoint and follow the midpoint', () => {
+test('two pointers pinching apart zoom the crop out around their midpoint and follow the midpoint', () => {
   const tracker = createCropGestureTracker()
   const surface = frame()
   tracker.down(1, surface, { x: 100, y: 100 })
   tracker.down(2, surface, { x: 200, y: 100 })
   assert.deepEqual(tracker.move(2, { x: 300, y: 100 }), [
     { kind: 'pan', dx: 50 / 400, dy: 0, factor: 1, x: 0, y: 0 },
-    { kind: 'zoom', dx: 0, dy: 0, factor: 2, x: 0.5, y: 0.5 },
+    { kind: 'zoom', dx: 0, dy: 0, factor: 0.5, x: 0.5, y: 0.5 },
   ])
 })
 

@@ -161,8 +161,8 @@ cropRegion state =
     { x = x, y = y, width = width, height = height }
 
 
-{-| Moves the crop with a pointer distance given as fractions of the preview frame. Dragging the
-image right reveals the part to its left, so the focus moves opposite to the drag.
+{-| Moves the crop selection with a pointer distance given as fractions of the preview frame. The
+selection follows the pointer, so dragging right increases the horizontal focus.
 -}
 panBy : Float -> Float -> State -> State
 panBy dx dy state =
@@ -239,7 +239,7 @@ panFocus visible delta focus =
         focus
 
     else
-        clampFloat 0 1 (focus - delta * visible / (1 - visible))
+        clampFloat 0 1 (focus + delta * visible / (1 - visible))
 
 
 anchoredFocus : Float -> Float -> Float -> Float -> Float

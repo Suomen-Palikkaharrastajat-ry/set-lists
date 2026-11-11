@@ -2727,7 +2727,7 @@ photoCropPanel crop =
                 []
             ]
         , p [ id "list-photo-crop-hint", class "type-caption text-text-muted" ]
-            [ text "Vedä kuvaa siirtääksesi rajausta. Zoomaa nipistämällä tai hiiren rullalla. Kehyksen ollessa valittuna nuolinäppäimet siirtävät ja + ja - zoomaavat."
+            [ text "Vedä rajaus siirtääksesi sitä. Nipistä ulospäin loitontaaksesi ja sisäänpäin lähentääksesi. Zoomaa myös hiiren rullalla. Kehyksen ollessa valittuna nuolinäppäimet siirtävät ja + ja - zoomaavat."
             ]
         , fieldset [ class "space-y-2" ]
             [ legend [ class "type-body-small font-semibold" ] [ text "Kuvasuhde" ]
