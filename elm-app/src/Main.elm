@@ -2173,29 +2173,28 @@ viewSet catalogsByCode index item =
     section [ class "print-break flex flex-wrap items-baseline gap-4 py-4" ]
         [ span [ class "type-mono text-text-muted" ] [ text (String.fromInt (index + 1) ++ ".") ]
         , div [ class "min-w-0 flex-1" ]
-            [ div [ class "flex flex-wrap items-start gap-4" ]
-                [ div [ class "min-w-0 flex-[1_1_12rem]" ]
-                    [ div [ class "flex flex-wrap items-baseline gap-3" ]
-                        [ h2 [ class "type-h3 break-words [overflow-wrap:anywhere]" ]
-                            [ text
-                                (if String.trim item.title == "" then
-                                    itemKindName item.kind
+            [ div [ class "flow-root" ]
+                [ viewCatalogThumbnails "hidden sm:float-right sm:mb-3 sm:ml-4 sm:flex sm:max-w-[45%] sm:flex-wrap sm:justify-end sm:gap-2" catalogsByCode item.codes
+                , div [ class "mb-2" ]
+                    [ h2 [ class "inline type-h3 break-words [overflow-wrap:anywhere]" ]
+                        [ text
+                            (if String.trim item.title == "" then
+                                itemKindName item.kind
 
-                                 else
-                                    item.title
-                                )
-                            ]
-                        , case MarkdownSafety.safeWebUrl item.url of
-                            Just safeUrl ->
-                                a [ href safeUrl, target "_blank", attribute "rel" "noopener noreferrer", class "text-brand underline" ] [ text "Lisätietoja" ]
-
-                            Nothing ->
-                                text ""
+                             else
+                                item.title
+                            )
                         ]
+                    , case MarkdownSafety.safeWebUrl item.url of
+                        Just safeUrl ->
+                            a [ href safeUrl, target "_blank", attribute "rel" "noopener noreferrer", class "ml-3 inline-block text-brand underline" ] [ text "Lisätietoja" ]
+
+                        Nothing ->
+                            text ""
                     ]
-                , viewCatalogThumbnails catalogsByCode item.codes
+                , viewCatalogThumbnails "float-left mr-4 mb-3 flex w-32 max-w-[45%] flex-col gap-2 sm:hidden" catalogsByCode item.codes
+                , viewItemMarkdown item.description
                 ]
-            , viewItemMarkdown item.description
             , if List.isEmpty item.codes then
                 p [ class "mt-2 type-caption text-text-muted" ] [ text "Ei setin tunnuksia" ]
 
@@ -2224,8 +2223,8 @@ viewCatalogSnapshot maybeCatalog =
             text ""
 
 
-viewCatalogThumbnails : Dict String Types.SetCatalog -> List String -> Html Msg
-viewCatalogThumbnails catalogsByCode codes =
+viewCatalogThumbnails : String -> Dict String Types.SetCatalog -> List String -> Html Msg
+viewCatalogThumbnails layoutClass catalogsByCode codes =
     let
         catalogs =
             codes
@@ -2236,8 +2235,7 @@ viewCatalogThumbnails catalogsByCode codes =
         text ""
 
     else
-        div [ class "flex max-w-full flex-wrap justify-end gap-2" ]
-            (List.map viewCatalogThumbnail catalogs)
+        div [ class layoutClass ] (List.map viewCatalogThumbnail catalogs)
 
 
 viewCatalogThumbnail : Types.SetCatalog -> Html Msg
@@ -2249,7 +2247,7 @@ viewCatalogThumbnail catalog =
                 , alt ("Setin kuva: " ++ catalog.name)
                 , attribute "loading" "lazy"
                 , attribute "referrerpolicy" "no-referrer"
-                , class "h-32 w-32 rounded object-contain"
+                , class "h-32 w-32 max-w-full rounded object-contain"
                 ]
                 []
 
