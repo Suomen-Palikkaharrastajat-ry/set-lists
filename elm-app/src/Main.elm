@@ -66,7 +66,6 @@ type alias Model =
     , setSearchStates : Dict Int SetSearchState
     , activeSuggestions : Dict Int Int
     , searchRequestId : Int
-    , codeDrafts : Dict Int String
     , openSetIndex : Maybe Int
     , draggingSetIndex : Maybe Int
     , dropGap : Maybe Int
@@ -227,8 +226,6 @@ type Msg
     | ListPhotoClearClicked
     | ListPhotoCleared ListPhotoClearedResult
     | PhotoFileTokenReceived PhotoFileTokenResult
-    | CodeDraftChanged Int String
-    | AddManualCode Int
     | RemoveItemCode Int String
     | SetSearchReady SetSearchPayload
     | SetSearchCompleted Int Int String (Result Http.Error (List Api.SetSuggestion))
@@ -390,7 +387,6 @@ init flags url key =
       , setSearchStates = Dict.empty
       , activeSuggestions = Dict.empty
       , searchRequestId = 0
-      , codeDrafts = Dict.empty
       , openSetIndex = Nothing
       , draggingSetIndex = Nothing
       , dropGap = Nothing
@@ -560,12 +556,12 @@ update msg model =
                     requiresAuth route && getToken model.auth == Nothing
             in
             if isProtected then
-                ( { model | url = url, route = Route.Home, ownedLists = NotLoaded, accumulatedLists = [], currentList = NotLoaded, setSearchQueries = Dict.empty, setSearchStates = Dict.empty, activeSuggestions = Dict.empty, codeDrafts = Dict.empty, openSetIndex = Nothing, draggingSetIndex = Nothing, dropGap = Nothing, editorTab = ItemsTab, photoUploadState = PhotoReady, photoCrop = Nothing, photoFileToken = Nothing, confirmDelete = False, menuOpen = False }
+                ( { model | url = url, route = Route.Home, ownedLists = NotLoaded, accumulatedLists = [], currentList = NotLoaded, setSearchQueries = Dict.empty, setSearchStates = Dict.empty, activeSuggestions = Dict.empty, openSetIndex = Nothing, draggingSetIndex = Nothing, dropGap = Nothing, editorTab = ItemsTab, photoUploadState = PhotoReady, photoCrop = Nothing, photoFileToken = Nothing, confirmDelete = False, menuOpen = False }
                 , Nav.pushUrl model.key "#/"
                 )
 
             else
-                ( { model | url = url, route = route, ownedLists = loaded.ownedLists, accumulatedLists = [], currentList = loaded.currentList, form = loaded.form, setSearchQueries = Dict.empty, setSearchStates = Dict.empty, activeSuggestions = Dict.empty, codeDrafts = Dict.empty, openSetIndex = Nothing, draggingSetIndex = Nothing, dropGap = Nothing, editorTab = ItemsTab, photoUploadState = PhotoReady, photoCrop = Nothing, photoFileToken = Nothing, confirmDelete = False, menuOpen = False }
+                ( { model | url = url, route = route, ownedLists = loaded.ownedLists, accumulatedLists = [], currentList = loaded.currentList, form = loaded.form, setSearchQueries = Dict.empty, setSearchStates = Dict.empty, activeSuggestions = Dict.empty, openSetIndex = Nothing, draggingSetIndex = Nothing, dropGap = Nothing, editorTab = ItemsTab, photoUploadState = PhotoReady, photoCrop = Nothing, photoFileToken = Nothing, confirmDelete = False, menuOpen = False }
                 , Cmd.batch
                     [ loaded.cmd
                     , Task.attempt (\_ -> NoOp) (Dom.focus "main-content")
@@ -1237,48 +1233,6 @@ update msg model =
         ItemTitleChanged index title ->
             ( mapForm (\form -> { form | items = updateAt index (\item -> { item | title = title }) form.items }) model, Cmd.none )
 
-        CodeDraftChanged index code ->
-            ( { model | codeDrafts = Dict.insert index code model.codeDrafts }, Cmd.none )
-
-        AddManualCode index ->
-            let
-                code =
-                    Dict.get index model.codeDrafts |> Maybe.withDefault "" |> String.trim
-
-                currentItem =
-                    List.drop index model.form.items |> List.head
-            in
-            case currentItem of
-                Just item ->
-                    if code == "" || List.member code item.codes then
-                        ( { model | codeDrafts = Dict.insert index "" model.codeDrafts }, Cmd.none )
-
-                    else
-                        let
-                            updated =
-                                mapForm
-                                    (\form ->
-                                        { form
-                                            | items =
-                                                updateAt index
-                                                    (\current -> Types.setItemCodesText (String.join "\n" (current.codes ++ [ code ])) current)
-                                                    form.items
-                                        }
-                                    )
-                                    model
-                        in
-                        ( { updated
-                            | codeDrafts = Dict.insert index "" updated.codeDrafts
-                            , setSearchQueries = Dict.insert index "" updated.setSearchQueries
-                            , setSearchStates = Dict.remove index updated.setSearchStates
-                            , activeSuggestions = Dict.remove index updated.activeSuggestions
-                          }
-                        , Cmd.none
-                        )
-
-                Nothing ->
-                    ( model, Cmd.none )
-
         RemoveItemCode index code ->
             let
                 updated =
@@ -1298,7 +1252,7 @@ update msg model =
                 , setSearchStates = Dict.remove index updated.setSearchStates
                 , activeSuggestions = Dict.remove index updated.activeSuggestions
               }
-            , Task.attempt (\_ -> NoOp) (Dom.focus ("manual-code-" ++ String.fromInt index))
+            , Task.attempt (\_ -> NoOp) (Dom.focus ("item-search-" ++ String.fromInt index))
             )
 
         ItemKindChanged index kind ->
@@ -1446,7 +1400,6 @@ update msg model =
                 | setSearchQueries = Dict.insert newIndex "" model.setSearchQueries
                 , setSearchStates = Dict.remove newIndex model.setSearchStates
                 , activeSuggestions = Dict.remove newIndex model.activeSuggestions
-                , codeDrafts = Dict.insert newIndex "" model.codeDrafts
                 , openSetIndex = Just newIndex
                 , editorTab = ItemsTab
               }
@@ -1481,7 +1434,7 @@ update msg model =
                             else
                                 Just openIndex
             in
-            ( { updated | setSearchQueries = Dict.empty, setSearchStates = Dict.empty, activeSuggestions = Dict.empty, codeDrafts = Dict.empty, openSetIndex = nextOpenIndex }
+            ( { updated | setSearchQueries = Dict.empty, setSearchStates = Dict.empty, activeSuggestions = Dict.empty, openSetIndex = nextOpenIndex }
             , Task.attempt (\_ -> NoOp)
                 (Dom.focus
                     (if List.isEmpty remainingItems then
@@ -1498,7 +1451,7 @@ update msg model =
                 updated =
                     mapForm (\form -> { form | items = ItemOrder.moveItem from to form.items }) model
             in
-            ( { updated | setSearchQueries = Dict.empty, setSearchStates = Dict.empty, activeSuggestions = Dict.empty, codeDrafts = Dict.empty, openSetIndex = moveOpenSetIndex from to model.openSetIndex }, Cmd.none )
+            ( { updated | setSearchQueries = Dict.empty, setSearchStates = Dict.empty, activeSuggestions = Dict.empty, openSetIndex = moveOpenSetIndex from to model.openSetIndex }, Cmd.none )
 
         SaveClicked ->
             case ( getToken model.auth, model.auth, model.route ) of
@@ -3402,9 +3355,6 @@ viewSetSearch model index item =
         listId =
             inputId ++ "-suggestions"
 
-        manualCodeId =
-            "manual-code-" ++ String.fromInt index
-
         query =
             Dict.get index model.setSearchQueries |> Maybe.withDefault ""
 
@@ -3461,7 +3411,7 @@ viewSetSearch model index item =
 
                 Just (SetSearchResults _ _ results) ->
                     if List.isEmpty results then
-                        p [ attribute "aria-live" "polite", class "type-caption text-text-muted" ] [ text "Settiä ei löytynyt. Voit täyttää tiedot itse." ]
+                        p [ attribute "aria-live" "polite", class "type-caption text-text-muted" ] [ text "Settiä ei löytynyt. Kokeile toista hakusanaa tai setin tunnusta." ]
 
                     else
                         text ""
@@ -3500,7 +3450,7 @@ viewSetSearch model index item =
                     p [ attribute "aria-live" "polite", class "type-caption text-text-muted" ] [ text message ]
 
                 Nothing ->
-                    p [ class "type-caption text-text-muted" ] [ text "Hae Rebrickablesta nimellä tai setin tunnuksella." ]
+                    text ""
 
         suggestionOption requestId suggestionIndex suggestion =
             let
@@ -3557,9 +3507,9 @@ viewSetSearch model index item =
 
         codesWidget =
             fieldset [ class "space-y-2" ]
-                [ Html.legend [ class "type-body-small" ] [ text "Set numbers" ]
+                [ Html.legend [ class "type-body-small" ] [ text "Settinumerot" ]
                 , if List.isEmpty item.codes then
-                    p [ class "type-caption text-text-muted" ] [ text "Tunnuksia ei vielä ole." ]
+                    text ""
 
                   else
                     ul [ class "flex flex-wrap gap-2" ]
@@ -3579,21 +3529,37 @@ viewSetSearch model index item =
                             )
                             item.codes
                         )
-                , div [ class "flex flex-wrap items-end gap-2" ]
-                    [ div [ class "min-w-48 flex-1" ]
-                        [ label [ class "mb-1 block type-caption text-text-muted", attribute "for" manualCodeId ] [ text "Tai lisää tunnus käsin" ]
-                        , input
-                            [ id manualCodeId
-                            , type_ "text"
-                            , value (Dict.get index model.codeDrafts |> Maybe.withDefault "")
-                            , onInput (CodeDraftChanged index)
-                            , placeholder "Esim. 75192-1 tai MOC-123"
-                            , class inputClass
-                            ]
-                            []
-                        ]
-                    , sharedButton "Lisää tunnus" (AddManualCode index) Button.Secondary False False
-                    ]
+                , input
+                    ([ id inputId
+                     , type_ "search"
+                     , value query
+                     , onInput (SetSearchChanged index)
+                     , placeholder "Hae settiä (esim. Millennium Falcon tai 6285)"
+                     , attribute "autocomplete" "off"
+                     , attribute "role" "combobox"
+                     , attribute "aria-autocomplete" "list"
+                     , attribute "aria-label" ("Hae settiä kohteelle: " ++ itemLabel)
+                     , attribute "aria-controls" listId
+                     , attribute "aria-expanded"
+                        (if expanded then
+                            "true"
+
+                         else
+                            "false"
+                        )
+                     , class inputClass
+                     ]
+                        ++ (if expanded then
+                                [ attribute "aria-activedescendant" (inputId ++ "-option-" ++ String.fromInt activeSuggestionIndex) ]
+
+                            else
+                                []
+                           )
+                        ++ keyboardAttributes
+                    )
+                    []
+                , status
+                , suggestionsView
                 , if Types.itemHasValidCodes item then
                     text ""
 
@@ -3601,41 +3567,7 @@ viewSetSearch model index item =
                     p [ class "type-caption text-brand-red" ] [ text "Setille ja vaihtoehtoiselle rakennelmalle vähintään yksi tunnus on pakollinen." ]
                 ]
     in
-    div [ class "relative space-y-2" ]
-        [ label [ class "block type-body-small", attribute "for" inputId ] [ text "Hae settiä" ]
-        , input
-            ([ id inputId
-             , type_ "search"
-             , value query
-             , onInput (SetSearchChanged index)
-             , placeholder "Esim. Millennium Falcon tai 6285"
-             , attribute "autocomplete" "off"
-             , attribute "role" "combobox"
-             , attribute "aria-autocomplete" "list"
-             , attribute "aria-label" ("Hae settiä kohteelle: " ++ itemLabel)
-             , attribute "aria-controls" listId
-             , attribute "aria-expanded"
-                (if expanded then
-                    "true"
-
-                 else
-                    "false"
-                )
-             , class inputClass
-             ]
-                ++ (if expanded then
-                        [ attribute "aria-activedescendant" (inputId ++ "-option-" ++ String.fromInt activeSuggestionIndex) ]
-
-                    else
-                        []
-                   )
-                ++ keyboardAttributes
-            )
-            []
-        , status
-        , suggestionsView
-        , codesWidget
-        ]
+    codesWidget
 
 
 serviceCheckbox : Int -> List Service -> Service -> Html Msg
