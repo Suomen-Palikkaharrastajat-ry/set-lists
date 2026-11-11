@@ -18,12 +18,20 @@ The app uses the selected Rebrickable suggestion's image URL first. If it has no
 image, it falls back to Brickset's `thumbnailURL`. The authenticated hook proxies
 the approved provider image to the app. The app decodes it, scales it down
 without upscaling so neither dimension exceeds 256 pixels, re-encodes it as
-WebP, and uploads that WebP to the code-keyed `table_thumbnails` PocketBase
+WebP, strips EXIF/XMP/ICC metadata chunks, and uploads that WebP to the code-keyed `table_thumbnails` PocketBase
 collection. The original provider image is not stored. Public list pages load
 the compact WebP from PocketBase rather than contacting either provider. The
 collection is created by
 `fixtures/pb_migrations/1794268800_table_thumbnails.js`; apply that migration
 before deploying the updated hook.
+
+The main list record can also have an optional camera/uploaded cover photo. It
+uses the same browser-side WebP conversion, metadata stripping, 256-pixel
+maximum edge, and 200 KB size limit, then uploads the result to the protected
+`table_catalogs.photo` file field. Apply
+`fixtures/pb_migrations/1794377044_table_catalogs_photo.js` before deploying the
+frontend. Public published views are authorized by the collection view rule;
+owner views of drafts use PocketBase's short-lived protected-file token.
 
 Lookup codes must use the canonical `digits-variant` form, such as `75192-1`.
 The route returns bounded metadata and an optional HTTPS image URL. Its shared

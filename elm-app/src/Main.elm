@@ -1,6 +1,6 @@
 port module Main exposing (main)
 
-{-| Hash-routed app for creating, owning, publishing, and sharing LEGO set lists.
+{-| Hash-routed app for creating, owning, publishing, and sharing table catalogs.
 
 i18n-exempt: Initial release exposes Finnish UI only; English is hidden in site configuration.
 
@@ -18,9 +18,10 @@ import Component.Layout as Layout
 import Component.Toast as Toast
 import Dict exposing (Dict)
 import FeatherIcons
+import File
 import Html exposing (Html, a, button, div, fieldset, h1, h2, h3, header, img, input, label, li, main_, p, section, span, text, textarea, ul)
 import Html.Attributes exposing (alt, attribute, checked, class, disabled, href, id, placeholder, src, target, type_, value)
-import Html.Events exposing (onCheck, onClick, onInput, preventDefaultOn)
+import Html.Events exposing (on, onCheck, onClick, onInput, preventDefaultOn)
 import Http
 import Json.Decode as Decode
 import Lang
@@ -69,6 +70,8 @@ type alias Model =
     , lookupRequestId : Int
     , markdownPreviewIds : List String
     , saving : Bool
+    , photoUploadState : PhotoUploadState
+    , photoFileToken : Maybe String
     , notice : Maybe String
     , confirmDelete : Bool
     , loginEmail : String
@@ -100,6 +103,13 @@ type EditorTab
     | DescriptionTab
 
 
+type PhotoUploadState
+    = PhotoReady
+    | PhotoUploading
+    | PhotoUploaded
+    | PhotoUploadFailed String
+
+
 type SetSearchState
     = SetSearchWaiting Int String
     | SetSearchLoading Int String
@@ -127,6 +137,20 @@ type alias SetThumbnailProcessed =
     }
 
 
+type alias ListPhotoResult =
+    { listId : String
+    , photo : String
+    , fileToken : String
+    , error : String
+    }
+
+
+type alias PhotoFileTokenResult =
+    { listId : String
+    , token : String
+    }
+
+
 type alias LocalPasswordLoginResult =
     { token : String
     , model : String
@@ -142,6 +166,8 @@ type Msg
     | LoginPasswordChanged String
     | LocalPasswordLoginClicked
     | LocalPasswordLoginCompleted LocalPasswordLoginResult
+    | EditorEscapePressed
+    | EditOnEnter
     | OAuthPopupResult { token : String, model : String }
     | LogOut
     | HomeListsLoaded String (Result Http.Error Api.ListPage)
@@ -150,6 +176,9 @@ type Msg
     | MarkdownChanged String
     | SetSearchChanged Int String
     | SetSearchKeyPressed Int String
+    | ListPhotoSelected String
+    | ListPhotoProcessed ListPhotoResult
+    | PhotoFileTokenReceived PhotoFileTokenResult
     | CodeDraftChanged Int String
     | AddManualCode Int
     | RemoveItemCode Int String
@@ -225,6 +254,18 @@ port processSetThumbnail : { index : Int, requestId : Int, code : String, imageU
 port setThumbnailProcessed : (SetThumbnailProcessed -> msg) -> Sub msg
 
 
+port processListPhoto : { inputId : String, listId : String, pbBaseUrl : String, token : String } -> Cmd msg
+
+
+port listPhotoProcessed : (ListPhotoResult -> msg) -> Sub msg
+
+
+port requestListPhotoFileToken : { listId : String, pbBaseUrl : String, token : String } -> Cmd msg
+
+
+port listPhotoFileTokenReceived : (PhotoFileTokenResult -> msg) -> Sub msg
+
+
 main : Program Flags Model Msg
 main =
     Browser.application
@@ -279,6 +320,8 @@ init flags url key =
       , lookupRequestId = 0
       , markdownPreviewIds = []
       , saving = False
+      , photoUploadState = PhotoReady
+      , photoFileToken = Nothing
       , notice = Nothing
       , confirmDelete = False
       , loginEmail = ""
@@ -335,13 +378,29 @@ subscriptions model =
         , localPasswordLoginResult LocalPasswordLoginCompleted
         , setSearchReady SetSearchReady
         , setThumbnailProcessed SetSuggestionThumbnailProcessed
+        , listPhotoProcessed ListPhotoProcessed
+        , listPhotoFileTokenReceived PhotoFileTokenReceived
         , Layout.subscriptions { isOpen = model.menuOpen, onClose = CloseMenu }
         , case model.route of
             Route.EditList _ ->
                 Browser.Events.onKeyDown
-                    (Decode.map2
-                        (\ctrlKey key ->
-                            if ctrlKey && key == "Enter" && not model.confirmDelete then
+                    (Decode.map3
+                        (\ctrlKey key targetId ->
+                            if
+                                key
+                                    == "Escape"
+                                    && not model.confirmDelete
+                                    && not model.menuOpen
+                                    && not (hasActiveSetSuggestions model)
+                                    && not (String.startsWith "item-search-" targetId)
+                                    && targetId
+                                    /= "list-photo-input"
+                                    && model.photoUploadState
+                                    /= PhotoUploading
+                            then
+                                EditorEscapePressed
+
+                            else if ctrlKey && key == "Enter" && not model.confirmDelete && model.photoUploadState /= PhotoUploading then
                                 SaveClicked
 
                             else
@@ -349,7 +408,41 @@ subscriptions model =
                         )
                         (Decode.field "ctrlKey" Decode.bool)
                         (Decode.field "key" Decode.string)
+                        (Decode.oneOf [ Decode.at [ "target", "id" ] Decode.string, Decode.succeed "" ])
                     )
+
+            Route.PublicList _ ->
+                if isOwnedPublicList model && not model.menuOpen then
+                    Browser.Events.onKeyDown
+                        (Decode.map6
+                            (\key ctrlKey altKey metaKey shiftKey targetInfo ->
+                                if
+                                    key
+                                        == "Enter"
+                                        && not ctrlKey
+                                        && not altKey
+                                        && not metaKey
+                                        && not shiftKey
+                                        && not (isInteractiveKeyTarget targetInfo.tagName targetInfo.role)
+                                then
+                                    EditOnEnter
+
+                                else
+                                    NoOp
+                            )
+                            (Decode.field "key" Decode.string)
+                            (Decode.field "ctrlKey" Decode.bool)
+                            (Decode.field "altKey" Decode.bool)
+                            (Decode.field "metaKey" Decode.bool)
+                            (Decode.field "shiftKey" Decode.bool)
+                            (Decode.map2 (\tagName role -> { tagName = tagName, role = role })
+                                (Decode.at [ "target", "tagName" ] Decode.string)
+                                (Decode.oneOf [ Decode.at [ "target", "role" ] Decode.string, Decode.succeed "" ])
+                            )
+                        )
+
+                else
+                    Sub.none
 
             _ ->
                 Sub.none
@@ -379,12 +472,12 @@ update msg model =
                     requiresAuth route && getToken model.auth == Nothing
             in
             if isProtected then
-                ( { model | url = url, route = Route.Home, ownedLists = NotLoaded, accumulatedLists = [], currentList = NotLoaded, setSearchQueries = Dict.empty, setSearchStates = Dict.empty, activeSuggestions = Dict.empty, codeDrafts = Dict.empty, openSetIndex = Nothing, editorTab = ItemsTab, confirmDelete = False, menuOpen = False }
+                ( { model | url = url, route = Route.Home, ownedLists = NotLoaded, accumulatedLists = [], currentList = NotLoaded, setSearchQueries = Dict.empty, setSearchStates = Dict.empty, activeSuggestions = Dict.empty, codeDrafts = Dict.empty, openSetIndex = Nothing, editorTab = ItemsTab, photoUploadState = PhotoReady, photoFileToken = Nothing, confirmDelete = False, menuOpen = False }
                 , Nav.pushUrl model.key "#/"
                 )
 
             else
-                ( { model | url = url, route = route, ownedLists = loaded.ownedLists, accumulatedLists = [], currentList = loaded.currentList, form = loaded.form, setSearchQueries = Dict.empty, setSearchStates = Dict.empty, activeSuggestions = Dict.empty, codeDrafts = Dict.empty, openSetIndex = initialOpenSet loaded.form.items, editorTab = ItemsTab, confirmDelete = False, menuOpen = False }
+                ( { model | url = url, route = route, ownedLists = loaded.ownedLists, accumulatedLists = [], currentList = loaded.currentList, form = loaded.form, setSearchQueries = Dict.empty, setSearchStates = Dict.empty, activeSuggestions = Dict.empty, codeDrafts = Dict.empty, openSetIndex = initialOpenSet loaded.form.items, editorTab = ItemsTab, photoUploadState = PhotoReady, photoFileToken = Nothing, confirmDelete = False, menuOpen = False }
                 , Cmd.batch
                     [ loaded.cmd
                     , Task.attempt (\_ -> NoOp) (Dom.focus "main-content")
@@ -395,6 +488,29 @@ update msg model =
                         Cmd.none
                     ]
                 )
+
+        EditorEscapePressed ->
+            case model.route of
+                Route.EditList (Just id) ->
+                    ( model, Nav.pushUrl model.key (Route.toHref (Route.PublicList id)) )
+
+                Route.EditList Nothing ->
+                    ( model, Nav.pushUrl model.key (Route.toHref Route.Home) )
+
+                _ ->
+                    ( model, Cmd.none )
+
+        EditOnEnter ->
+            case ( model.route, model.currentList, model.auth ) of
+                ( Route.PublicList listId, Loaded record, Authenticated user ) ->
+                    if listId == record.id && user.id == record.owner then
+                        ( model, Nav.pushUrl model.key (Route.toHref (Route.EditList (Just record.id))) )
+
+                    else
+                        ( model, Cmd.none )
+
+                _ ->
+                    ( model, Cmd.none )
 
         LoginClicked ->
             ( model, initiateOAuth model.pbBaseUrl )
@@ -487,6 +603,7 @@ update msg model =
                             ( { model
                                 | currentList = Loaded record
                                 , form = form
+                                , photoFileToken = Nothing
                                 , openSetIndex =
                                     case model.route of
                                         Route.EditList _ ->
@@ -495,7 +612,12 @@ update msg model =
                                         _ ->
                                             Nothing
                               }
-                            , Cmd.none
+                            , case ( record.photo, getToken model.auth ) of
+                                ( Just _, Just token ) ->
+                                    requestListPhotoFileToken { listId = record.id, pbBaseUrl = model.pbBaseUrl, token = token }
+
+                                _ ->
+                                    Cmd.none
                             )
 
                     Err error ->
@@ -503,6 +625,71 @@ update msg model =
 
             else
                 ( model, Cmd.none )
+
+        ListPhotoSelected listId ->
+            case ( model.route, model.currentList, getToken model.auth ) of
+                ( Route.EditList (Just routeId), Loaded record, Just token ) ->
+                    if routeId /= listId || record.id /= listId || model.photoUploadState == PhotoUploading then
+                        ( model, Cmd.none )
+
+                    else
+                        ( { model | photoUploadState = PhotoUploading }
+                        , processListPhoto
+                            { inputId = "list-photo-input"
+                            , listId = listId
+                            , pbBaseUrl = model.pbBaseUrl
+                            , token = token
+                            }
+                        )
+
+                _ ->
+                    ( model, Cmd.none )
+
+        ListPhotoProcessed result ->
+            case ( model.route, model.currentList ) of
+                ( Route.EditList (Just routeId), Loaded record ) ->
+                    if routeId /= result.listId || record.id /= result.listId then
+                        ( model, Cmd.none )
+
+                    else if result.error /= "" then
+                        ( { model | photoUploadState = PhotoUploadFailed (photoUploadErrorMessage result.error) }, Cmd.none )
+
+                    else
+                        ( { model
+                            | currentList = Loaded { record | photo = Maybe.andThen nonEmptyPhoto (Just result.photo) }
+                            , photoUploadState = PhotoUploaded
+                            , photoFileToken =
+                                case nonEmptyPhoto result.fileToken of
+                                    Just token ->
+                                        Just token
+
+                                    Nothing ->
+                                        model.photoFileToken
+                          }
+                        , Cmd.none
+                        )
+
+                _ ->
+                    ( model, Cmd.none )
+
+        PhotoFileTokenReceived result ->
+            case ( model.route, model.currentList ) of
+                ( Route.PublicList routeId, Loaded record ) ->
+                    if routeId == result.listId && record.id == result.listId && result.token /= "" then
+                        ( { model | photoFileToken = Just result.token }, Cmd.none )
+
+                    else
+                        ( model, Cmd.none )
+
+                ( Route.EditList (Just routeId), Loaded record ) ->
+                    if routeId == result.listId && record.id == result.listId && result.token /= "" then
+                        ( { model | photoFileToken = Just result.token }, Cmd.none )
+
+                    else
+                        ( model, Cmd.none )
+
+                _ ->
+                    ( model, Cmd.none )
 
         TitleChanged title ->
             ( mapForm (\form -> { form | title = title }) model, Cmd.none )
@@ -1075,14 +1262,17 @@ update msg model =
         SaveClicked ->
             case ( getToken model.auth, model.auth, model.route ) of
                 ( Just token, Authenticated user, Route.EditList maybeId ) ->
-                    if String.trim model.form.title == "" then
+                    if model.saving || model.photoUploadState == PhotoUploading then
+                        ( model, Cmd.none )
+
+                    else if String.trim model.form.title == "" then
                         ( { model | notice = Just "Anna listalle otsikko ennen tallentamista." }, Cmd.none )
 
                     else if List.any (Types.itemHasTitle >> not) model.form.items then
                         ( { model | notice = Just "Anna jokaiselle kohteelle otsikko ennen tallentamista." }, Cmd.none )
 
                     else if List.any (Types.itemHasValidCodes >> not) model.form.items then
-                        ( { model | notice = Just "Lisää vähintään yksi LEGO-tunnus jokaiselle setille ja vaihtoehtoiselle rakennelmalle ennen tallentamista." }, Cmd.none )
+                        ( { model | notice = Just "Lisää vähintään yksi tunnus jokaiselle setille ja vaihtoehtoiselle rakennelmalle ennen tallentamista." }, Cmd.none )
 
                     else if List.any (\item -> String.trim item.url /= "" && MarkdownSafety.safeWebUrl item.url == Nothing) model.form.items then
                         ( { model | notice = Just "Lisätietojen URL-osoitteen tulee alkaa http:// tai https://." }, Cmd.none )
@@ -1108,7 +1298,11 @@ update msg model =
         DeleteClicked ->
             case model.route of
                 Route.EditList (Just _) ->
-                    ( { model | confirmDelete = True }, Task.attempt (\_ -> NoOp) (Dom.focus "delete-dialog-cancel") )
+                    if model.photoUploadState == PhotoUploading then
+                        ( model, Cmd.none )
+
+                    else
+                        ( { model | confirmDelete = True }, Task.attempt (\_ -> NoOp) (Dom.focus "delete-dialog-cancel") )
 
                 _ ->
                     ( model, Cmd.none )
@@ -1473,7 +1667,7 @@ viewHome model =
     case model.auth of
         NotAuthenticated ->
             section [ class "mx-auto max-w-2xl rounded-lg border border-border-default bg-white p-6 sm:p-10" ]
-                [ h1 [ class "type-h1" ] [ text "Luo ja jaa LEGO-pöytäesitteitä" ]
+                [ h1 [ class "type-h1" ] [ text "Luo ja jaa pöytäesitteitä" ]
                 , p [ class "type-body mt-4" ] [ text "Kirjaudu sisään luodaksesi omia listoja. Julkaistuja listoja voi tarkastella niiden omalla linkillä." ]
                 , if model.localPasswordAuth then
                     div [ class "mt-6 max-w-md space-y-4" ]
@@ -1522,7 +1716,7 @@ viewHome model =
                 [ div [ class "mb-6 flex flex-wrap items-center justify-between gap-4" ]
                     [ div []
                         [ h1 [ class "type-h1" ] [ text "Omat listat" ]
-                        , p [ class "type-body mt-2 text-text-muted" ] [ text "Hallinnoi luonnoksia ja jaettuja LEGO-pöytäesitteitä." ]
+                        , p [ class "type-body mt-2 text-text-muted" ] [ text "Hallinnoi luonnoksia ja jaettuja pöytäesitteitä." ]
                         ]
                     , Button.link { label = "Luo uusi lista", href = "#/lists/new" }
                         |> Button.withVariant Button.Primary
@@ -1611,7 +1805,7 @@ viewPublicList model =
                 section [ class "rounded-lg bg-white p-6" ] [ h1 [ class "type-h1" ] [ text "Listaa ei löytynyt" ] ]
 
             else
-                viewListDetail (isAuthenticated model.auth) owned record
+                viewListDetail model owned record
 
         NotLoaded ->
             text ""
@@ -1627,9 +1821,43 @@ isAuthenticated auth =
             False
 
 
-viewListDetail : Bool -> Bool -> ListRecord -> Html Msg
-viewListDetail authenticated owned record =
+isOwnedPublicList : Model -> Bool
+isOwnedPublicList model =
+    case ( model.route, model.currentList, model.auth ) of
+        ( Route.PublicList listId, Loaded record, Authenticated user ) ->
+            listId == record.id && user.id == record.owner
+
+        _ ->
+            False
+
+
+isInteractiveKeyTarget : String -> String -> Bool
+isInteractiveKeyTarget tagName role =
+    List.member (String.toUpper tagName) [ "A", "BUTTON", "INPUT", "TEXTAREA", "SELECT", "OPTION", "SUMMARY" ]
+        || List.member (String.toLower role) [ "button", "link", "tab", "menuitem", "option", "combobox" ]
+
+
+hasActiveSetSuggestions : Model -> Bool
+hasActiveSetSuggestions model =
+    model.editorTab
+        == ItemsTab
+        && (model.openSetIndex
+                |> Maybe.map (\index -> Dict.member index model.activeSuggestions)
+                |> Maybe.withDefault False
+           )
+
+
+viewListDetail : Model -> Bool -> ListRecord -> Html Msg
+viewListDetail model owned record =
     let
+        authenticated =
+            isAuthenticated model.auth
+
+        catalogsByCode =
+            record.items
+                |> List.filterMap .catalog
+                |> List.foldl (\catalog catalogs -> Dict.insert catalog.code catalog catalogs) Dict.empty
+
         containerClass =
             if authenticated then
                 "print-list mx-auto max-w-3xl rounded-lg border border-border-default bg-white p-5 shadow-sm sm:p-8"
@@ -1639,13 +1867,18 @@ viewListDetail authenticated owned record =
 
         itemsClass =
             if authenticated then
-                "mt-7 divide-y divide-border-default"
+                "mt-7 divide-y divide-border-default print-items"
 
             else
-                "mt-5"
+                "mt-5 print-items"
     in
     section [ class containerClass ]
-        [ if authenticated then
+        [ if record.status == Published then
+            viewPrintQr record.id
+
+          else
+            text ""
+        , if authenticated then
             div [ class "no-print mb-5 flex flex-wrap items-center justify-between gap-3" ]
                 [ a [ href "#/", class "text-brand underline" ] [ text "← Omat listat" ]
                 , div [ class "flex gap-2" ]
@@ -1671,33 +1904,64 @@ viewListDetail authenticated owned record =
           else
             text ""
         , div [ class "flex flex-wrap items-start justify-between gap-4" ]
-            ([ div []
-                [ h1 [ class "type-h1" ] [ text record.title ]
+            ([ div [ class "min-w-0 flex-1 flow-root" ]
+                [ viewListPhoto model record
+                , h1 [ class "type-h1" ] [ text record.title ]
                 , viewMarkdown record.markdown
                 ]
              ]
                 ++ (if authenticated then
-                        [ statusBadge record.status ]
+                        [ div [ class "no-print" ] [ statusBadge record.status ] ]
 
                     else
                         []
                    )
             )
-        , div [ class itemsClass ] (List.indexedMap viewSet record.items)
-        , if record.status == Published then
-            viewPrintQr record.id
-
-          else
-            text ""
+        , div [ class itemsClass ] (List.indexedMap (viewSet catalogsByCode) record.items)
         ]
 
 
-viewSet : Int -> SetItem -> Html Msg
-viewSet index item =
+nonEmptyPhoto : String -> Maybe String
+nonEmptyPhoto filename =
+    if String.trim filename == "" then
+        Nothing
+
+    else
+        Just filename
+
+
+listPhotoUrlForModel : Model -> ListRecord -> Maybe String
+listPhotoUrlForModel model record =
+    if record.status == Draft && model.photoFileToken == Nothing then
+        Nothing
+
+    else
+        Api.photoUrl model.pbBaseUrl model.photoFileToken record
+
+
+viewListPhoto : Model -> ListRecord -> Html Msg
+viewListPhoto model record =
+    case listPhotoUrlForModel model record of
+        Just imageUrl ->
+            img
+                [ src imageUrl
+                , alt ("Kansikuva: " ++ record.title)
+                , attribute "loading" "eager"
+                , attribute "referrerpolicy" "no-referrer"
+                , class "float-left mr-4 mb-3 h-32 w-32 rounded object-contain"
+                ]
+                []
+
+        Nothing ->
+            text ""
+
+
+viewSet : Dict String Types.SetCatalog -> Int -> SetItem -> Html Msg
+viewSet catalogsByCode index item =
     section [ class "print-break flex flex-wrap items-baseline gap-4 py-4" ]
         [ span [ class "type-mono text-text-muted" ] [ text (String.fromInt (index + 1) ++ ".") ]
         , div [ class "min-w-0 flex-1" ]
-            [ viewCatalogThumbnail item.catalog
+            [ viewCatalogThumbnails catalogsByCode item.codes
             , div [ class "flex flex-wrap items-baseline gap-3" ]
                 [ h2 [ class "type-h3" ]
                     [ text
@@ -1717,10 +1981,10 @@ viewSet index item =
                 ]
             , viewItemMarkdown item.description
             , if List.isEmpty item.codes then
-                p [ class "mt-2 type-caption text-text-muted" ] [ text "Ei LEGO-tunnuksia" ]
+                p [ class "mt-2 type-caption text-text-muted" ] [ text "Ei setin tunnuksia" ]
 
               else
-                div [ class "mt-3 space-y-3" ] (List.map (viewCodeLinks item.services item.catalog) item.codes)
+                div [ class "mt-3 space-y-3" ] (List.map (viewCodeLinks item.services catalogsByCode) item.codes)
             ]
         ]
 
@@ -1744,16 +2008,32 @@ viewCatalogSnapshot maybeCatalog =
             text ""
 
 
-viewCatalogThumbnail : Maybe Types.SetCatalog -> Html Msg
-viewCatalogThumbnail maybeCatalog =
-    case maybeCatalog |> Maybe.andThen .imageUrl of
+viewCatalogThumbnails : Dict String Types.SetCatalog -> List String -> Html Msg
+viewCatalogThumbnails catalogsByCode codes =
+    let
+        catalogs =
+            codes
+                |> List.filterMap (\code -> Dict.get code catalogsByCode)
+                |> List.filter (\catalog -> catalog.imageUrl /= Nothing)
+    in
+    if List.isEmpty catalogs then
+        text ""
+
+    else
+        div [ class "float-right ml-4 mb-3 flex max-w-full flex-wrap justify-end gap-2" ]
+            (List.map viewCatalogThumbnail catalogs)
+
+
+viewCatalogThumbnail : Types.SetCatalog -> Html Msg
+viewCatalogThumbnail catalog =
+    case catalog.imageUrl of
         Just imageUrl ->
             img
                 [ src imageUrl
-                , alt ("Setin kuva: " ++ (maybeCatalog |> Maybe.map .name |> Maybe.withDefault ""))
+                , alt ("Setin kuva: " ++ catalog.name)
                 , attribute "loading" "lazy"
                 , attribute "referrerpolicy" "no-referrer"
-                , class "float-right ml-4 mb-3 h-32 w-32 rounded object-contain"
+                , class "h-32 w-32 rounded object-contain"
                 ]
                 []
 
@@ -1780,12 +2060,12 @@ catalogProviderName provider =
             "Brickset"
 
 
-viewCodeLinks : List Service -> Maybe Types.SetCatalog -> String -> Html Msg
-viewCodeLinks services maybeCatalog code =
+viewCodeLinks : List Service -> Dict String Types.SetCatalog -> String -> Html Msg
+viewCodeLinks services catalogsByCode code =
     div [ class "flex flex-wrap items-baseline gap-x-4 gap-y-2" ]
         ([ span [ class "inline-flex items-center gap-2 type-mono" ]
             ([ text code ]
-                ++ (case catalogYearForCode maybeCatalog code of
+                ++ (case catalogYearForCode catalogsByCode code of
                         Just year ->
                             [ span [ class "inline-flex items-center gap-1 type-body-small text-text-muted" ]
                                 [ FeatherIcons.calendar
@@ -1805,23 +2085,15 @@ viewCodeLinks services maybeCatalog code =
 
                 else
                     List.map
-                        (\service -> a [ href (Api.serviceHref service code), target "_blank", attribute "rel" "noopener noreferrer", class "type-body-small text-brand underline" ] [ text (Types.serviceName service) ])
+                        (\service -> a [ href (Api.serviceHref service code), target "_blank", attribute "rel" "noopener noreferrer", class "no-print type-body-small text-brand underline" ] [ text (Types.serviceName service) ])
                         services
                )
         )
 
 
-catalogYearForCode : Maybe Types.SetCatalog -> String -> Maybe Int
-catalogYearForCode maybeCatalog code =
-    maybeCatalog
-        |> Maybe.andThen
-            (\catalog ->
-                if catalog.code == code then
-                    catalog.year
-
-                else
-                    Nothing
-            )
+catalogYearForCode : Dict String Types.SetCatalog -> String -> Maybe Int
+catalogYearForCode catalogsByCode code =
+    Dict.get code catalogsByCode |> Maybe.andThen .year
 
 
 itemKindName : ItemKind -> String
@@ -1918,7 +2190,7 @@ viewPrintQr : String -> Html Msg
 viewPrintQr id =
     let
         publicUrl =
-            "https://listat.palikkaharrastajat.fi/#/" ++ id
+            "https://esite.palikkaharrastajat.fi/#/" ++ id
     in
     case QRCode.fromString publicUrl of
         Ok qr ->
@@ -2021,6 +2293,7 @@ viewEditForm model maybeId =
                                 , placeholder = Just "Esim. Keskiaikaiset linnat"
                                 }
                             , markdownEditor (List.member "list-markdown" model.markdownPreviewIds) "list-markdown" "Kuvaus" model.form.markdown MarkdownChanged
+                            , viewListPhotoEditor model maybeId
                             ]
                 ]
             , Form.radioGroup
@@ -2038,16 +2311,113 @@ viewEditForm model maybeId =
                 , layout = Form.Inline
                 }
             , div [ class "flex flex-wrap items-center gap-3 border-t border-border-default pt-5" ]
-                [ sharedButton "Tallenna lista" SaveClicked Button.Primary model.saving model.saving
+                [ sharedButton "Tallenna lista" SaveClicked Button.Primary (model.saving || model.photoUploadState == PhotoUploading) model.saving
                 , case maybeId of
                     Just _ ->
-                        deleteListButton model.saving
+                        deleteListButton (model.saving || model.photoUploadState == PhotoUploading)
 
                     Nothing ->
                         text ""
                 ]
             ]
         ]
+
+
+viewListPhotoEditor : Model -> Maybe String -> Html Msg
+viewListPhotoEditor model maybeId =
+    let
+        maybeRecord =
+            case ( maybeId, model.currentList ) of
+                ( Just id, Loaded record ) ->
+                    if id == record.id then
+                        Just record
+
+                    else
+                        Nothing
+
+                _ ->
+                    Nothing
+
+        maybePhotoUrl =
+            maybeRecord |> Maybe.andThen (listPhotoUrlForModel model)
+
+        photoInputAttributes =
+            case maybeId of
+                Just listId ->
+                    [ on "change"
+                        (Decode.at [ "target", "files" ] (Decode.index 0 File.decoder)
+                            |> Decode.map (\_ -> ListPhotoSelected listId)
+                        )
+                    ]
+
+                Nothing ->
+                    []
+
+        statusView =
+            case model.photoUploadState of
+                PhotoReady ->
+                    text ""
+
+                PhotoUploading ->
+                    p [ id "list-photo-status", attribute "role" "status", attribute "aria-live" "polite", class "type-caption text-text-muted" ] [ text "Kansikuvaa käsitellään ja tallennetaan…" ]
+
+                PhotoUploaded ->
+                    p [ id "list-photo-status", attribute "role" "status", attribute "aria-live" "polite", class "type-caption text-text-muted" ] [ text "Kansikuva tallennettiin." ]
+
+                PhotoUploadFailed message ->
+                    p [ id "list-photo-status", attribute "role" "alert", class "type-caption text-brand-red" ] [ text message ]
+    in
+    section [ class "space-y-3 rounded-lg border border-border-default bg-white p-4" ]
+        [ h2 [ class "type-h4" ] [ text "Listan kansikuva" ]
+        , label [ class "block type-body-small", attribute "for" "list-photo-input" ] [ text "Ota kuva tai valitse kuvatiedosto" ]
+        , input
+            ([ id "list-photo-input"
+             , type_ "file"
+             , attribute "accept" "image/*"
+             , attribute "aria-describedby" "list-photo-help"
+             , disabled (maybeId == Nothing || model.photoUploadState == PhotoUploading)
+             , class inputClass
+             ]
+                ++ photoInputAttributes
+            )
+            []
+        , p [ id "list-photo-help", class "type-caption text-text-muted" ]
+            [ text
+                (if maybeId == Nothing then
+                    "Tallenna lista ensin, avaa se muokattavaksi ja lisää sitten kansikuva."
+
+                 else
+                    "Valokuva pienennetään 256 pikseliin ja tallennetaan WebP-kuvana (enintään 200 kt). Enimmäiskoko ennen käsittelyä on 20 Mt."
+                )
+            ]
+        , statusView
+        , case maybePhotoUrl of
+            Just imageUrl ->
+                img
+                    [ src imageUrl
+                    , alt "Listan nykyinen kansikuva"
+                    , attribute "loading" "eager"
+                    , attribute "referrerpolicy" "no-referrer"
+                    , class "h-32 w-32 rounded object-contain"
+                    ]
+                    []
+
+            Nothing ->
+                text ""
+        ]
+
+
+photoUploadErrorMessage : String -> String
+photoUploadErrorMessage code =
+    case code of
+        "photo-too-large" ->
+            "Kuvan alkuperäinen tiedosto saa olla enintään 20 Mt."
+
+        "unsupported-image" ->
+            "Valitse kuvatiedosto, jonka selain pystyy avaamaan."
+
+        _ ->
+            "Kuvaa ei voitu käsitellä tai tallentaa. Valitse toinen kuva ja yritä uudelleen."
 
 
 editorTabs : EditorTab -> Html Msg
@@ -2634,7 +3004,7 @@ viewSetSearch model index item =
 
         codesWidget =
             fieldset [ class "space-y-2" ]
-                [ Html.legend [ class "type-body-small" ] [ text "LEGO-tunnukset" ]
+                [ Html.legend [ class "type-body-small" ] [ text "Set numbers" ]
                 , if List.isEmpty item.codes then
                     p [ class "type-caption text-text-muted" ] [ text "Tunnuksia ei vielä ole." ]
 

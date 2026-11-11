@@ -1,4 +1,4 @@
-module Api exposing (ListPage, LookupProvider(..), SetLookupResult, SetSuggestion, decodeList, decodeSetItem, decodeSetLookupResult, decodeSetSuggestion, deleteList, fetchList, fetchLists, listBody, lookupSet, lookupUrl, saveList, searchSetSuggestions, searchUrl, serviceHref)
+module Api exposing (ListPage, LookupProvider(..), SetLookupResult, SetSuggestion, decodeList, decodeSetItem, decodeSetLookupResult, decodeSetSuggestion, deleteList, fetchList, fetchLists, listBody, lookupSet, lookupUrl, photoUrl, saveList, searchSetSuggestions, searchUrl, serviceHref)
 
 {-| PocketBase list API, JSON codecs, and service-specific set search links.
 -}
@@ -122,7 +122,19 @@ searchUrl baseUrl query =
 
 decodeList : Decoder ListRecord
 decodeList =
-    Decode.map8 ListRecord
+    Decode.map8
+        (\id title description markdown items status owner updated ->
+            { id = id
+            , title = title
+            , description = description
+            , markdown = markdown
+            , items = items
+            , status = status
+            , owner = owner
+            , updated = updated
+            , photo = Nothing
+            }
+        )
         (Decode.field "id" Decode.string)
         (Decode.field "title" Decode.string)
         (Decode.maybe (Decode.field "description" Decode.string) |> Decode.map (Maybe.withDefault ""))
@@ -131,6 +143,39 @@ decodeList =
         (Decode.field "status" Decode.string |> Decode.map statusFromString)
         (Decode.maybe (Decode.field "owner" Decode.string) |> Decode.map (Maybe.withDefault ""))
         (Decode.maybe (Decode.field "updated" Decode.string) |> Decode.map (Maybe.withDefault ""))
+        |> Decode.andThen
+            (\record ->
+                Decode.map (\photo -> { record | photo = photo })
+                    (Decode.maybe (Decode.field "photo" Decode.string)
+                        |> Decode.map
+                            (Maybe.andThen
+                                (\filename ->
+                                    if String.trim filename == "" then
+                                        Nothing
+
+                                    else
+                                        Just filename
+                                )
+                            )
+                    )
+            )
+
+
+photoUrl : String -> Maybe String -> ListRecord -> Maybe String
+photoUrl baseUrl maybeFileToken record =
+    record.photo
+        |> Maybe.map
+            (\filename ->
+                baseUrl
+                    ++ "/api/files/table_catalogs/"
+                    ++ Url.percentEncode record.id
+                    ++ "/"
+                    ++ Url.percentEncode filename
+                    ++ (maybeFileToken
+                            |> Maybe.map (\token -> "?token=" ++ Url.percentEncode token)
+                            |> Maybe.withDefault ""
+                       )
+            )
 
 
 decodeSetItem : Decoder SetItem

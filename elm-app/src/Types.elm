@@ -1,6 +1,6 @@
 module Types exposing (CatalogProvider(..), ItemKind(..), ListForm, ListRecord, ListStatus(..), Service(..), SetCatalog, SetItem, acceptCatalog, emptyForm, emptySetItem, fillTitleFromLookup, firstLookupCode, itemHasTitle, itemHasValidCodes, itemKindFromString, itemKindToString, lookupCodeMatches, normalizeCodes, serviceFromString, serviceName, serviceToString, setItemCodesText, validSetCode)
 
-{-| Domain types for persisted LEGO set lists and their ordered rows.
+{-| Domain types for persisted table catalogs and their ordered rows.
 -}
 
 import Char
@@ -73,6 +73,7 @@ type alias ListRecord =
     , status : ListStatus
     , owner : String
     , updated : String
+    , photo : Maybe String
     }
 
 

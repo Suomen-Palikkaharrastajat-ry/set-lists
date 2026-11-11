@@ -1,5 +1,5 @@
 /// <reference path="../pb_data/types.d.ts" />
-// Private-by-default owned set lists. Only published lists are public; owners
+// Private-by-default owned table catalogs. Only published catalogs are public; owners
 // can read and manage their own drafts and published records.
 migrate((app) => {
   const lists = new Collection({

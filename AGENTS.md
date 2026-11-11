@@ -2,8 +2,8 @@
 
 ## Project overview
 
-Set Lists is an Elm 0.19 SPA backed by PocketBase. Signed-in users manage their
-own LEGO set lists; published lists are public at `/#/[id]`. The Haskell
+Table catalogs is an Elm 0.19 SPA backed by PocketBase. Signed-in users manage
+their own catalogs; published catalogs are public at `/#/[id]`. The Haskell
 `statics` executable is intentionally a no-op, but its build target is retained
 for compatibility with the sibling projects.
 
@@ -56,6 +56,11 @@ publish their ports; keep those bind addresses when changing their commands.
   cached in PocketBase;
   public list routes must render saved snapshots without provider API requests.
   See `docs/set-lookup.md` for deployed-hook troubleshooting.
+- The optional main-list cover is a protected `table_catalogs.photo` WebP file.
+  Uploads must be decoded and re-encoded in the browser, stripped of image
+  metadata, limited to a 256px maximum edge and 200 KB, and authorized through
+  PocketBase's list view rule/file token. Apply the cover-photo migration before
+  deploying the frontend.
 - Keep `robots.txt` disallowing all crawlers and the document metadata noindex.
 - Apply the PocketBase migration before using a fresh local instance. Local
   development uses password login against loopback PocketBase and requires a
@@ -68,11 +73,13 @@ publish their ports; keep those bind addresses when changing their commands.
 - A user can create, order, edit, and delete their own lists, but not another
   user's lists.
 - Drafts are private; published list routes work signed out.
+- An owner can upload a cover from a camera or image picker; published covers
+  display to signed-out visitors, while draft covers remain protected.
 - Anonymous published-list views have a non-linked logo bar only, no status or
   container borders, actions, QR section, or footer; check mobile width.
 - Each set displays only its selected provider links.
 - Printing a published list outputs only its centered QR code on A4, linking to
-  `https://listat.palikkaharrastajat.fi/#/[id]`.
+  `https://esite.palikkaharrastajat.fi/#/[id]`.
 - `dist/robots.txt` contains `Disallow: /`.
 
 ## Agent Sandbox
@@ -81,7 +88,7 @@ publish their ports; keep those bind addresses when changing their commands.
 [network]
 allowed_hosts = [
     "GET,POST,PATCH,DELETE,HEAD data.palikkaharrastajat.fi:443/**",
-    "GET,HEAD listat.palikkaharrastajat.fi:443/**",
+    "GET,HEAD esite.palikkaharrastajat.fi:443/**",
     "GET,HEAD palikkaharrastajat.fi:443/**",
     "GET,POST,HEAD lemur-14.cloud-iam.com:443/**",
     "GET,HEAD package.elm-lang.org:443/**",

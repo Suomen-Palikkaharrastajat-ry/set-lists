@@ -3,6 +3,7 @@ import { Elm } from './src/Main.elm'
 import siteConfig from 'virtual:site-config'
 import { getInitAuth, wirePocketBaseAuthPorts, triggerBackgroundAuthRefresh } from './packages/app-toolkit/js/pocketbase-auth.js'
 import { appSettings, pickLang, showLanguage } from './packages/site-config/browser.mjs'
+import { stripWebpMetadata, thumbnailDimensions } from './photo-pipeline.mjs'
 
 const settings = appSettings(siteConfig, pickLang(siteConfig))
 const pbBaseUrl = import.meta.env.VITE_POCKETBASE_URL || settings.pocketbase_url
@@ -22,6 +23,9 @@ const app = Elm.Main.init({
 })
 
 const SET_SEARCH_DEBOUNCE_MS = 1000
+const MAX_SET_IMAGE_BYTES = 1_000_000
+const MAX_LIST_PHOTO_BYTES = 20_000_000
+const MAX_THUMBNAIL_BYTES = 200_000
 const setSearchTimers = new Map()
 app.ports.scheduleSetSearch.subscribe((payload) => {
   const previous = setSearchTimers.get(payload.index)
@@ -44,9 +48,35 @@ async function decodeThumbnailImage(blob) {
   try {
     await image.decode()
     return { image, release: () => URL.revokeObjectURL(objectUrl) }
-  } catch (error) {
+  } catch (_) {
     URL.revokeObjectURL(objectUrl)
     throw error
+  }
+}
+
+async function encodeWebpThumbnail(sourceBlob, maxSourceBytes) {
+  if (sourceBlob.size === 0 || sourceBlob.size > maxSourceBytes) throw new Error('Invalid source image size')
+
+  const decoded = await decodeThumbnailImage(sourceBlob)
+  try {
+    const image = decoded.image
+    const sourceWidth = image.width || image.naturalWidth
+    const sourceHeight = image.height || image.naturalHeight
+    const dimensions = thumbnailDimensions(sourceWidth, sourceHeight)
+    const canvas = document.createElement('canvas')
+    canvas.width = dimensions.width
+    canvas.height = dimensions.height
+    const context = canvas.getContext('2d')
+    if (!context) throw new Error('Canvas unavailable')
+    context.drawImage(image, 0, 0, canvas.width, canvas.height)
+    const encoded = await new Promise((resolve) => canvas.toBlob(resolve, 'image/webp', 0.82))
+    if (!encoded || encoded.type !== 'image/webp') throw new Error('WebP conversion failed')
+
+    const sanitized = await stripWebpMetadata(encoded)
+    if (sanitized.size === 0 || sanitized.size > MAX_THUMBNAIL_BYTES) throw new Error('WebP thumbnail is too large')
+    return sanitized
+  } finally {
+    decoded.release()
   }
 }
 
@@ -70,34 +100,17 @@ app.ports.processSetThumbnail.subscribe(async (payload) => {
     const collection = pb.collection('table_thumbnails')
     let record = await findStoredThumbnail(collection, payload.code)
 
-    if (record?.thumbnail) {
-      imageUrl = pb.files.getURL(record, record.thumbnail)
-    } else {
+      if (record?.thumbnail) {
+        imageUrl = pb.files.getURL(record, record.thumbnail)
+      } else {
       const sourceEndpoint = new URL('/api/set-lists/thumbnail-source', payload.pbBaseUrl)
       sourceEndpoint.searchParams.set('url', payload.imageUrl)
       const sourceResponse = await fetch(sourceEndpoint, {
         headers: { Authorization: payload.token },
-      })
-      if (!sourceResponse.ok) throw new Error('Thumbnail source unavailable')
-      const sourceBlob = await sourceResponse.blob()
-      if (sourceBlob.size === 0 || sourceBlob.size > 1_000_000) throw new Error('Invalid thumbnail size')
-
-      const decoded = await decodeThumbnailImage(sourceBlob)
-      try {
-        const image = decoded.image
-        const sourceWidth = image.width || image.naturalWidth
-        const sourceHeight = image.height || image.naturalHeight
-        if (!sourceWidth || !sourceHeight) throw new Error('Invalid thumbnail dimensions')
-        const scale = Math.min(1, 256 / sourceWidth, 256 / sourceHeight)
-        const canvas = document.createElement('canvas')
-        canvas.width = Math.max(1, Math.round(sourceWidth * scale))
-        canvas.height = Math.max(1, Math.round(sourceHeight * scale))
-        const context = canvas.getContext('2d')
-        if (!context) throw new Error('Canvas unavailable')
-        context.drawImage(image, 0, 0, canvas.width, canvas.height)
-        const webp = await new Promise((resolve) => canvas.toBlob(resolve, 'image/webp', 0.82))
-        if (!webp || webp.type !== 'image/webp' || webp.size > 200_000) throw new Error('WebP conversion failed')
-
+        })
+        if (!sourceResponse.ok) throw new Error('Thumbnail source unavailable')
+        const sourceBlob = await sourceResponse.blob()
+        const webp = await encodeWebpThumbnail(sourceBlob, MAX_SET_IMAGE_BYTES)
         const file = new File([webp], `set-${payload.code}.webp`, { type: 'image/webp' })
         try {
           record = await collection.create({ code: payload.code, thumbnail: file })
@@ -106,10 +119,7 @@ app.ports.processSetThumbnail.subscribe(async (payload) => {
           record = await findStoredThumbnail(collection, payload.code)
           if (!record) throw error
         }
-      } finally {
-        decoded.release()
-      }
-      if (record?.thumbnail) imageUrl = pb.files.getURL(record, record.thumbnail)
+        if (record?.thumbnail) imageUrl = pb.files.getURL(record, record.thumbnail)
     }
   } catch (_) {
     // Keep the set metadata even if thumbnail conversion or storage is unavailable.
@@ -121,6 +131,63 @@ app.ports.processSetThumbnail.subscribe(async (payload) => {
     code: payload.code,
     imageUrl,
   })
+})
+
+app.ports.processListPhoto.subscribe(async (payload) => {
+  const input = document.getElementById(payload.inputId)
+  let photo = ''
+  let fileToken = ''
+  let errorCode = ''
+
+  try {
+    if (!/^[a-z0-9]{10,20}$/i.test(payload.listId)) throw new Error('Invalid list id')
+    const sourceFile = input?.files?.[0]
+    if (!sourceFile || (sourceFile.type && !sourceFile.type.startsWith('image/'))) {
+      errorCode = 'unsupported-image'
+      throw new Error('Invalid photo type')
+    }
+    if (sourceFile.size > MAX_LIST_PHOTO_BYTES) {
+      errorCode = 'photo-too-large'
+      throw new Error('Photo too large')
+    }
+
+    const webp = await encodeWebpThumbnail(sourceFile, MAX_LIST_PHOTO_BYTES)
+    const file = new File([webp], 'list-cover.webp', { type: 'image/webp' })
+    const formData = new FormData()
+    formData.append('photo', file)
+
+    const PocketBase = (await import('pocketbase')).default
+    const pb = new PocketBase(payload.pbBaseUrl)
+    pb.authStore.save(payload.token, null)
+    const record = await pb.collection('table_catalogs').update(payload.listId, formData)
+    photo = typeof record.photo === 'string' ? record.photo : ''
+    if (photo) {
+      try {
+        fileToken = await pb.files.getToken()
+      } catch (_) {
+        // Published lists can still serve their protected photo under the public view rule.
+      }
+    }
+  } catch (_) {
+    if (!errorCode) errorCode = 'processing-failed'
+  } finally {
+    if (input) input.value = ''
+  }
+
+  app.ports.listPhotoProcessed.send({ listId: payload.listId, photo, fileToken, error: errorCode })
+})
+
+app.ports.requestListPhotoFileToken.subscribe(async (payload) => {
+  let token = ''
+  try {
+    const PocketBase = (await import('pocketbase')).default
+    const pb = new PocketBase(payload.pbBaseUrl)
+    pb.authStore.save(payload.token, null)
+    token = await pb.files.getToken()
+  } catch (_) {
+    // Public published photos are also authorized by the collection's view rule.
+  }
+  app.ports.listPhotoFileTokenReceived.send({ listId: payload.listId, token })
 })
 
 app.ports.setDocumentLang.subscribe((lang) => showLanguage(siteConfig, lang))

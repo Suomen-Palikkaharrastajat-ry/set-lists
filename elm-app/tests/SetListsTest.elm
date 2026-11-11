@@ -16,10 +16,10 @@ import Url
 
 suite : Test
 suite =
-    describe "set lists"
+    describe "table catalogs"
         [ test "Given a hash link to a list, when parsed, then it opens the public list route" <|
             \_ ->
-                "https://listat.palikkaharrastajat.fi/#/abc123"
+                "https://esite.palikkaharrastajat.fi/#/abc123"
                     |> Url.fromString
                     |> Maybe.map Route.parseUrl
                     |> Expect.equal (Just (Route.PublicList "abc123"))
@@ -133,6 +133,33 @@ suite =
                     , \_ -> Decode.decodeString Api.decodeList "{\"id\":\"list-id\",\"title\":\"Catalog\",\"content\":\"## Notes\",\"status\":\"draft\",\"owner\":\"owner-id\"}" |> Result.map .markdown |> Expect.equal (Ok "## Notes")
                     ]
                     ()
+        , test "Given an optional list photo, when a record is decoded, then its filename is retained" <|
+            \_ ->
+                Decode.decodeString Api.decodeList "{\"id\":\"list-id\",\"title\":\"Catalog\",\"status\":\"published\",\"photo\":\"cover.webp\"}"
+                    |> Result.map .photo
+                    |> Expect.equal (Ok (Just "cover.webp"))
+        , test "Given no list photo, when a record is decoded, then photo is empty" <|
+            \_ ->
+                Expect.equal
+                    [ Ok Nothing, Ok Nothing ]
+                    [ Decode.decodeString Api.decodeList "{\"id\":\"list-id\",\"title\":\"Catalog\",\"status\":\"published\"}" |> Result.map .photo
+                    , Decode.decodeString Api.decodeList "{\"id\":\"list-id\",\"title\":\"Catalog\",\"status\":\"published\",\"photo\":\"\"}" |> Result.map .photo
+                    ]
+        , test "Given a list photo, when its URL is built, then the record and file names are path-encoded" <|
+            \_ ->
+                Decode.decodeString Api.decodeList "{\"id\":\"list/id\",\"title\":\"Catalog\",\"status\":\"published\",\"photo\":\"cover photo.webp\"}"
+                    |> Result.map (Api.photoUrl "https://pb.example" Nothing >> Maybe.withDefault "Missing photo URL")
+                    |> Expect.equal (Ok "https://pb.example/api/files/table_catalogs/list%2Fid/cover%20photo.webp")
+        , test "Given an authenticated photo URL, when built, then the short-lived file token is encoded" <|
+            \_ ->
+                Decode.decodeString Api.decodeList "{\"id\":\"list-id\",\"title\":\"Catalog\",\"status\":\"draft\",\"photo\":\"cover.webp\"}"
+                    |> Result.map (Api.photoUrl "https://pb.example" (Just "file.token/with+symbols") >> Maybe.withDefault "Missing photo URL")
+                    |> Expect.equal (Ok "https://pb.example/api/files/table_catalogs/list-id/cover.webp?token=file.token%2Fwith%2Bsymbols")
+        , test "Given a list form, when it is encoded, then the separately uploaded photo is not overwritten" <|
+            \_ ->
+                Api.listBody "owner-id" { title = "Catalog", description = "", markdown = "", items = [], status = Draft }
+                    |> Decode.decodeValue (Decode.field "photo" Decode.string)
+                    |> Expect.err
         , test "Given safe web and relative Markdown URLs, when checked, then they are retained" <|
             \_ ->
                 Expect.equal

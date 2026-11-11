@@ -1,13 +1,13 @@
-# Palikkaesitteet (Set Lists)
+# Palikkaesitteet (Table catalogs)
 
 Palikkaesitteet is an Elm 0.19 SPA backed by PocketBase. Signed-in members can
-create, edit, publish, and delete their own set lists. Ordered list items can be
-LEGO sets, alternate builds, or MOCs; each item supports multiple LEGO codes,
+create, edit, publish, and delete their own table catalogs. Ordered list items can be
+sets, alternate builds, or MOCs; each item supports multiple set numbers,
 selected LEGO.com/Brickset/BrickLink/Rebrickable links, optional Markdown description, and a
 safe HTTP(S) reference URL. Lists and item descriptions include a small
 Markdown toolbar and preview. A published list is available at `/#/[id]` and
 includes an A4 print view with a QR code to
-`https://listat.palikkaharrastajat.fi/#/[id]`.
+`https://esite.palikkaharrastajat.fi/#/[id]`.
 
 Signed-in editors can search Rebrickable for a set, then automatically enrich
 the selected item with Brickset metadata and a PocketBase-hosted thumbnail.
@@ -46,7 +46,8 @@ PocketBase, where member authentication is already configured.
 
 The `table_catalogs` collection stores `title`, `description`, list-level `content`
 (Markdown), and an ordered JSON `items` array (`{ title, codes, type, services,
-description?, url?, catalog? }` per item),
+description?, url?, catalog? }` per item), an optional protected `photo` cover
+image,
 `status` (`draft` or `published`), and the authenticated PocketBase user id in
 `owner`. `type` is `set`, `altbuild`, or `moc`; set and alternate-build items
 require at least one code, while MOC codes are optional and may contain multiple
@@ -74,6 +75,13 @@ published records. The home screen itself is login-only and fetches all pages of
 the authenticated owner's lists, so accounts with more than 200 lists are not
 silently truncated. `assets/robots.txt` disallows all crawlers and the document
 metadata requests `noindex, nofollow, noarchive`.
+
+The optional `photo` file is uploaded separately to an existing list record.
+The browser re-encodes it as a metadata-free WebP thumbnail (maximum edge 256 px,
+maximum size 200 KB). The `1794377044_table_catalogs_photo` migration must be
+applied before deploying the frontend. Protected-file access follows the list
+view rule: published covers work for anonymous visitors, while draft covers
+require the authenticated owner's short-lived file token.
 
 For deployment, ensure the target PocketBase collection has the current field
 schema before deploying the frontend. Its JSON `items` field currently has a

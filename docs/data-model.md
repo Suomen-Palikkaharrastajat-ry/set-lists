@@ -1,4 +1,4 @@
-# Set-list data model
+# Table-catalog data model
 
 `table_catalogs.items` is an ordered JSON array. Each object has this shape:
 
@@ -20,6 +20,16 @@
   }
 }
 ```
+
+The record also has an optional `photo` PocketBase file-field filename. It is not
+part of the JSON list form and is uploaded separately after the list record has
+been created. The editor accepts a camera photo or image file, decodes and
+re-encodes it as WebP, strips EXIF/XMP/ICC metadata, scales its longest edge to
+256 pixels without upscaling, and caps the result at 200 KB. The field is
+protected: its file access is checked against the `table_catalogs` view rule, so
+published list photos work anonymously while private draft photos require an
+owner file token. The optional field is added by
+`fixtures/pb_migrations/1794377044_table_catalogs_photo.js`.
 
 `title` is required for every item and is shown as its heading. `type` is `set` (the default), `altbuild`, or `moc`. Set and alternate-build
 items require at least one code; MOCs may have zero or more codes. The chosen

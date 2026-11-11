@@ -1,4 +1,4 @@
-# Set lists: public LEGO set lists with PocketBase-backed editing.
+# Table catalogs: public set catalogs with PocketBase-backed editing.
 
 [i18n]
 default = "fi"
@@ -6,13 +6,13 @@ languages = ["fi", "en"]
 hidden = ["en"]
 
 [site]
-url = "https://listat.palikkaharrastajat.fi"
+url = "https://esite.palikkaharrastajat.fi"
 title = "Palikkaesitteet"
-description = "Luo ja jaa LEGO-pöytäesitteitä Suomen Palikkaharrastajat ry:n palvelussa."
+description = "Luo ja jaa pöytäesitteitä Suomen Palikkaharrastajat ry:n jäsenpalvelussa."
 
 [site.en]
-title = "LEGO set lists"
-description = "Create and share LEGO set lists with Suomen Palikkaharrastajat ry."
+title = "Table catalogs"
+description = "Create and share table catalogs with Suomen Palikkaharrastajat ry members-only service."
 
 [metadata]
 robots = "noindex, nofollow, noarchive"
@@ -20,10 +20,10 @@ robots = "noindex, nofollow, noarchive"
 [pwa]
 scope = "/"
 orientation = "portrait"
-description = "Luo ja jaa LEGO-pöytäesitteitä."
+description = "Luo ja jaa pöytäesitteitä."
 
 [pwa.en]
-description = "Create and share LEGO set lists."
+description = "Create and share table catalogs."
 
 [navbar]
 variant = "app"
