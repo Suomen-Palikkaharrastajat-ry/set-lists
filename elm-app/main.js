@@ -21,6 +21,7 @@ const app = Elm.Main.init({
   },
 })
 
+const SET_SEARCH_DEBOUNCE_MS = 1000
 const setSearchTimers = new Map()
 app.ports.scheduleSetSearch.subscribe((payload) => {
   const previous = setSearchTimers.get(payload.index)
@@ -28,7 +29,7 @@ app.ports.scheduleSetSearch.subscribe((payload) => {
   const timer = setTimeout(() => {
     setSearchTimers.delete(payload.index)
     app.ports.setSearchReady.send(payload)
-  }, 1000)
+  }, SET_SEARCH_DEBOUNCE_MS)
   setSearchTimers.set(payload.index, timer)
 })
 
