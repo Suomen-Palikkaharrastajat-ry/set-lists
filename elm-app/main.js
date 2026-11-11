@@ -166,3 +166,33 @@ app.ports.localPasswordLogin.subscribe(async ({ email, password }) => {
 triggerBackgroundAuthRefresh(pbBaseUrl, initAuth, {
   loadPocketBase: () => import('pocketbase').then((module) => module.default),
 })
+
+// Keep keyboard focus inside the mobile navigation's modal drawer.
+document.addEventListener('keydown', (event) => {
+  if (event.key !== 'Tab') return
+
+  const drawer = document.getElementById('mobile-nav')
+  if (!drawer || drawer.hasAttribute('inert') || drawer.getClientRects().length === 0) return
+
+  const focusable = Array.from(
+    drawer.querySelectorAll('a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])'),
+  ).filter((element) => element.getClientRects().length > 0 && !element.closest('[inert]'))
+
+  if (focusable.length === 0) {
+    event.preventDefault()
+    drawer.focus()
+    return
+  }
+
+  const first = focusable[0]
+  const last = focusable[focusable.length - 1]
+  const focusIsOutsideDrawer = !drawer.contains(document.activeElement)
+
+  if (event.shiftKey && (document.activeElement === first || focusIsOutsideDrawer)) {
+    event.preventDefault()
+    last.focus()
+  } else if (!event.shiftKey && (document.activeElement === last || focusIsOutsideDrawer)) {
+    event.preventDefault()
+    first.focus()
+  }
+}, true)

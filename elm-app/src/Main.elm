@@ -9,10 +9,10 @@ i18n-exempt: Initial release exposes Finnish UI only; English is hidden in site 
 import Api
 import Browser
 import Browser.Dom as Dom
+import Browser.Events
 import Browser.Navigation as Nav
 import Component.Account as Account
 import Component.Button as Button
-import Component.Dialog as Dialog
 import Component.Form as Form
 import Component.Layout as Layout
 import Component.Toast as Toast
@@ -20,7 +20,7 @@ import Dict exposing (Dict)
 import FeatherIcons
 import Html exposing (Html, a, button, div, fieldset, h1, h2, h3, header, img, input, label, li, main_, p, section, span, text, textarea, ul)
 import Html.Attributes exposing (alt, attribute, checked, class, disabled, href, id, placeholder, src, target, type_, value)
-import Html.Events exposing (onCheck, onClick, onInput)
+import Html.Events exposing (onCheck, onClick, onInput, preventDefaultOn)
 import Http
 import Json.Decode as Decode
 import Lang
@@ -61,6 +61,7 @@ type alias Model =
     , form : ListForm
     , setSearchQueries : Dict Int String
     , setSearchStates : Dict Int SetSearchState
+    , activeSuggestions : Dict Int Int
     , searchRequestId : Int
     , codeDrafts : Dict Int String
     , openSetIndex : Maybe Int
@@ -148,6 +149,7 @@ type Msg
     | TitleChanged String
     | MarkdownChanged String
     | SetSearchChanged Int String
+    | SetSearchKeyPressed Int String
     | CodeDraftChanged Int String
     | AddManualCode Int
     | RemoveItemCode Int String
@@ -167,6 +169,7 @@ type Msg
     | NoOp
     | StatusChanged String
     | SelectEditorTab EditorTab
+    | EditorTabKeyPressed String
     | ToggleService Int Service Bool
     | ToggleSetAccordion Int
     | AddSet
@@ -177,6 +180,7 @@ type Msg
     | DeleteClicked
     | ConfirmDelete
     | CancelDelete
+    | FocusDeleteDialog String
     | DeleteCompleted (Result Http.Error ())
     | PrintClicked
     | DismissNotice
@@ -267,6 +271,7 @@ init flags url key =
       , form = loaded.form
       , setSearchQueries = Dict.empty
       , setSearchStates = Dict.empty
+      , activeSuggestions = Dict.empty
       , searchRequestId = 0
       , codeDrafts = Dict.empty
       , openSetIndex = initialOpenSet loaded.form.items
@@ -331,6 +336,23 @@ subscriptions model =
         , setSearchReady SetSearchReady
         , setThumbnailProcessed SetSuggestionThumbnailProcessed
         , Layout.subscriptions { isOpen = model.menuOpen, onClose = CloseMenu }
+        , case model.route of
+            Route.EditList _ ->
+                Browser.Events.onKeyDown
+                    (Decode.map2
+                        (\ctrlKey key ->
+                            if ctrlKey && key == "Enter" && not model.confirmDelete then
+                                SaveClicked
+
+                            else
+                                NoOp
+                        )
+                        (Decode.field "ctrlKey" Decode.bool)
+                        (Decode.field "key" Decode.string)
+                    )
+
+            _ ->
+                Sub.none
         ]
 
 
@@ -357,14 +379,15 @@ update msg model =
                     requiresAuth route && getToken model.auth == Nothing
             in
             if isProtected then
-                ( { model | url = url, route = Route.Home, ownedLists = NotLoaded, accumulatedLists = [], currentList = NotLoaded, setSearchQueries = Dict.empty, setSearchStates = Dict.empty, codeDrafts = Dict.empty, openSetIndex = Nothing, editorTab = ItemsTab, confirmDelete = False, menuOpen = False }
+                ( { model | url = url, route = Route.Home, ownedLists = NotLoaded, accumulatedLists = [], currentList = NotLoaded, setSearchQueries = Dict.empty, setSearchStates = Dict.empty, activeSuggestions = Dict.empty, codeDrafts = Dict.empty, openSetIndex = Nothing, editorTab = ItemsTab, confirmDelete = False, menuOpen = False }
                 , Nav.pushUrl model.key "#/"
                 )
 
             else
-                ( { model | url = url, route = route, ownedLists = loaded.ownedLists, accumulatedLists = [], currentList = loaded.currentList, form = loaded.form, setSearchQueries = Dict.empty, setSearchStates = Dict.empty, codeDrafts = Dict.empty, openSetIndex = initialOpenSet loaded.form.items, editorTab = ItemsTab, confirmDelete = False, menuOpen = False }
+                ( { model | url = url, route = route, ownedLists = loaded.ownedLists, accumulatedLists = [], currentList = loaded.currentList, form = loaded.form, setSearchQueries = Dict.empty, setSearchStates = Dict.empty, activeSuggestions = Dict.empty, codeDrafts = Dict.empty, openSetIndex = initialOpenSet loaded.form.items, editorTab = ItemsTab, confirmDelete = False, menuOpen = False }
                 , Cmd.batch
                     [ loaded.cmd
+                    , Task.attempt (\_ -> NoOp) (Dom.focus "main-content")
                     , if model.menuOpen then
                         Layout.onMenuClosed NoOp
 
@@ -498,6 +521,7 @@ update msg model =
                 updated =
                     { model
                         | setSearchQueries = Dict.insert index query model.setSearchQueries
+                        , activeSuggestions = Dict.remove index model.activeSuggestions
                         , searchRequestId = requestId
                     }
             in
@@ -512,6 +536,44 @@ update msg model =
                 ( { updated | setSearchStates = Dict.insert index (SetSearchWaiting requestId trimmedQuery) model.setSearchStates }
                 , scheduleSetSearch payload
                 )
+
+        SetSearchKeyPressed index key ->
+            case Dict.get index model.setSearchStates of
+                Just (SetSearchResults requestId _ suggestions) ->
+                    let
+                        activeIndex =
+                            Dict.get index model.activeSuggestions |> Maybe.withDefault 0
+
+                        lastIndex =
+                            max 0 (List.length suggestions - 1)
+                    in
+                    case key of
+                        "ArrowDown" ->
+                            ( { model | activeSuggestions = Dict.insert index (min lastIndex (activeIndex + 1)) model.activeSuggestions }, Cmd.none )
+
+                        "ArrowUp" ->
+                            ( { model | activeSuggestions = Dict.insert index (max 0 (activeIndex - 1)) model.activeSuggestions }, Cmd.none )
+
+                        "Enter" ->
+                            List.drop activeIndex suggestions
+                                |> List.head
+                                |> Maybe.map (SetSuggestionSelected index requestId >> (\selectionMsg -> update selectionMsg model))
+                                |> Maybe.withDefault ( model, Cmd.none )
+
+                        "Escape" ->
+                            ( { model
+                                | setSearchQueries = Dict.insert index "" model.setSearchQueries
+                                , setSearchStates = Dict.remove index model.setSearchStates
+                                , activeSuggestions = Dict.remove index model.activeSuggestions
+                              }
+                            , Cmd.none
+                            )
+
+                        _ ->
+                            ( model, Cmd.none )
+
+                _ ->
+                    ( model, Cmd.none )
 
         SetSearchReady payload ->
             case Dict.get payload.index model.setSearchStates of
@@ -543,7 +605,15 @@ update msg model =
                     else
                         case result of
                             Ok suggestions ->
-                                ( { model | setSearchStates = Dict.insert index (SetSearchResults requestId query suggestions) model.setSearchStates }
+                                ( { model
+                                    | setSearchStates = Dict.insert index (SetSearchResults requestId query suggestions) model.setSearchStates
+                                    , activeSuggestions =
+                                        if List.isEmpty suggestions then
+                                            Dict.remove index model.activeSuggestions
+
+                                        else
+                                            Dict.insert index 0 model.activeSuggestions
+                                  }
                                 , Cmd.none
                                 )
 
@@ -621,6 +691,7 @@ update msg model =
                     updatedWithSearch =
                         { updated
                             | setSearchQueries = Dict.insert index "" model.setSearchQueries
+                            , activeSuggestions = Dict.remove index model.activeSuggestions
                             , setSearchStates =
                                 if codeAlreadyPresent then
                                     Dict.insert index (SetSearchCodeAdded "Tunnus on jo listassa.") model.setSearchStates
@@ -805,6 +876,7 @@ update msg model =
                             | codeDrafts = Dict.insert index "" updated.codeDrafts
                             , setSearchQueries = Dict.insert index "" updated.setSearchQueries
                             , setSearchStates = Dict.remove index updated.setSearchStates
+                            , activeSuggestions = Dict.remove index updated.activeSuggestions
                           }
                         , Cmd.none
                         )
@@ -829,8 +901,9 @@ update msg model =
             ( { updated
                 | setSearchQueries = Dict.insert index "" updated.setSearchQueries
                 , setSearchStates = Dict.remove index updated.setSearchStates
+                , activeSuggestions = Dict.remove index updated.activeSuggestions
               }
-            , Cmd.none
+            , Task.attempt (\_ -> NoOp) (Dom.focus ("manual-code-" ++ String.fromInt index))
             )
 
         ItemKindChanged index kind ->
@@ -889,6 +962,19 @@ update msg model =
         SelectEditorTab tab ->
             ( { model | editorTab = tab }, Cmd.none )
 
+        EditorTabKeyPressed key ->
+            let
+                nextTab =
+                    editorTabForKey model.editorTab key
+            in
+            if nextTab == model.editorTab then
+                ( model, Cmd.none )
+
+            else
+                ( { model | editorTab = nextTab }
+                , Task.attempt (\_ -> NoOp) (Dom.focus (editorTabId nextTab))
+                )
+
         ToggleService index service enabled ->
             let
                 toggle item =
@@ -931,6 +1017,7 @@ update msg model =
             ( { updated
                 | setSearchQueries = Dict.insert newIndex "" model.setSearchQueries
                 , setSearchStates = Dict.remove newIndex model.setSearchStates
+                , activeSuggestions = Dict.remove newIndex model.activeSuggestions
                 , codeDrafts = Dict.insert newIndex "" model.codeDrafts
                 , openSetIndex = Just newIndex
                 , editorTab = ItemsTab
@@ -966,8 +1053,16 @@ update msg model =
                             else
                                 Just openIndex
             in
-            ( { updated | setSearchQueries = Dict.empty, setSearchStates = Dict.empty, codeDrafts = Dict.empty, openSetIndex = nextOpenIndex }
-            , Cmd.none
+            ( { updated | setSearchQueries = Dict.empty, setSearchStates = Dict.empty, activeSuggestions = Dict.empty, codeDrafts = Dict.empty, openSetIndex = nextOpenIndex }
+            , Task.attempt (\_ -> NoOp)
+                (Dom.focus
+                    (if List.isEmpty remainingItems then
+                        editorTabId ItemsTab
+
+                     else
+                        "edit-set-toggle-" ++ String.fromInt (min index (List.length remainingItems - 1))
+                    )
+                )
             )
 
         MoveSet from to ->
@@ -975,7 +1070,7 @@ update msg model =
                 updated =
                     mapForm (\form -> { form | items = moveItem from to form.items }) model
             in
-            ( { updated | setSearchQueries = Dict.empty, setSearchStates = Dict.empty, codeDrafts = Dict.empty, openSetIndex = moveOpenSetIndex from to model.openSetIndex }, Cmd.none )
+            ( { updated | setSearchQueries = Dict.empty, setSearchStates = Dict.empty, activeSuggestions = Dict.empty, codeDrafts = Dict.empty, openSetIndex = moveOpenSetIndex from to model.openSetIndex }, Cmd.none )
 
         SaveClicked ->
             case ( getToken model.auth, model.auth, model.route ) of
@@ -1013,7 +1108,7 @@ update msg model =
         DeleteClicked ->
             case model.route of
                 Route.EditList (Just _) ->
-                    ( { model | confirmDelete = True }, Cmd.none )
+                    ( { model | confirmDelete = True }, Task.attempt (\_ -> NoOp) (Dom.focus "delete-dialog-cancel") )
 
                 _ ->
                     ( model, Cmd.none )
@@ -1021,13 +1116,21 @@ update msg model =
         ConfirmDelete ->
             case ( getToken model.auth, model.route ) of
                 ( Just token, Route.EditList (Just id) ) ->
-                    ( { model | saving = True, confirmDelete = False }, Api.deleteList model.pbBaseUrl token id DeleteCompleted )
+                    ( { model | saving = True, confirmDelete = False }
+                    , Cmd.batch
+                        [ Api.deleteList model.pbBaseUrl token id DeleteCompleted
+                        , Task.attempt (\_ -> NoOp) (Dom.focus "delete-list-button")
+                        ]
+                    )
 
                 _ ->
                     ( model, Cmd.none )
 
         CancelDelete ->
-            ( { model | confirmDelete = False }, Cmd.none )
+            ( { model | confirmDelete = False }, Task.attempt (\_ -> NoOp) (Dom.focus "delete-list-button") )
+
+        FocusDeleteDialog targetId ->
+            ( model, Task.attempt (\_ -> NoOp) (Dom.focus targetId) )
 
         DeleteCompleted result ->
             case result of
@@ -1035,7 +1138,9 @@ update msg model =
                     ( { model | saving = False, confirmDelete = False, notice = Just "Lista poistettiin." }, Nav.pushUrl model.key "#/" )
 
                 Err error ->
-                    ( { model | saving = False, confirmDelete = False, notice = Just ("Poisto epäonnistui: " ++ httpError error) }, Cmd.none )
+                    ( { model | saving = False, confirmDelete = False, notice = Just ("Poisto epäonnistui: " ++ httpError error) }
+                    , Task.attempt (\_ -> NoOp) (Dom.focus "delete-list-button")
+                    )
 
         PrintClicked ->
             ( model, printDocument () )
@@ -1152,6 +1257,41 @@ moveOpenSetIndex from to maybeOpenIndex =
         maybeOpenIndex
 
 
+editorTabForKey : EditorTab -> String -> EditorTab
+editorTabForKey activeTab key =
+    case ( activeTab, key ) of
+        ( ItemsTab, "ArrowLeft" ) ->
+            DescriptionTab
+
+        ( ItemsTab, "ArrowRight" ) ->
+            DescriptionTab
+
+        ( DescriptionTab, "ArrowLeft" ) ->
+            ItemsTab
+
+        ( DescriptionTab, "ArrowRight" ) ->
+            ItemsTab
+
+        ( _, "Home" ) ->
+            ItemsTab
+
+        ( _, "End" ) ->
+            DescriptionTab
+
+        _ ->
+            activeTab
+
+
+editorTabId : EditorTab -> String
+editorTabId tab =
+    case tab of
+        ItemsTab ->
+            "editor-tab-items"
+
+        DescriptionTab ->
+            "editor-tab-description"
+
+
 mapForm : (ListForm -> ListForm) -> Model -> Model
 mapForm transform model =
     { model | form = transform model.form }
@@ -1178,7 +1318,14 @@ view model =
         Layout.view
             { site = model.site
             , strings = UiStrings.forLang model.lang
-            , attributes = [ class "min-h-screen flex flex-col bg-bg-page text-text-primary" ]
+            , attributes =
+                [ class "min-h-screen flex flex-col bg-bg-page text-text-primary" ]
+                    ++ (if model.confirmDelete then
+                            [ attribute "inert" "" ]
+
+                        else
+                            []
+                       )
             , home =
                 { href =
                     if anonymousPublicList then
@@ -1223,13 +1370,13 @@ view model =
                         }
             , main =
                 if anonymousPublicList then
-                    main_ [ attribute "id" "main-content", class "w-full flex-1" ]
+                    main_ [ attribute "id" "main-content", attribute "tabindex" "-1", class "w-full flex-1" ]
                         [ viewAnonymousBrandBar model
                         , div [ class "mx-auto w-full max-w-5xl px-3 py-4 sm:px-4 sm:py-8" ] [ viewPage model ]
                         ]
 
                 else
-                    main_ [ attribute "id" "main-content", class "mx-auto w-full max-w-5xl flex-1 px-4 py-8" ] [ viewPage model ]
+                    main_ [ attribute "id" "main-content", attribute "tabindex" "-1", class "mx-auto w-full max-w-5xl flex-1 px-4 py-8" ] [ viewPage model ]
             , aboveFooter = []
             , footer =
                 if anonymousPublicList then
@@ -1550,7 +1697,8 @@ viewSet index item =
     section [ class "print-break flex flex-wrap items-baseline gap-4 py-4" ]
         [ span [ class "type-mono text-text-muted" ] [ text (String.fromInt (index + 1) ++ ".") ]
         , div [ class "min-w-0 flex-1" ]
-            [ div [ class "flex flex-wrap items-baseline gap-3" ]
+            [ viewCatalogThumbnail item.catalog
+            , div [ class "flex flex-wrap items-baseline gap-3" ]
                 [ h2 [ class "type-h3" ]
                     [ text
                         (if String.trim item.title == "" then
@@ -1568,12 +1716,11 @@ viewSet index item =
                         text ""
                 ]
             , viewItemMarkdown item.description
-            , viewCatalogThumbnail item.catalog
             , if List.isEmpty item.codes then
                 p [ class "mt-2 type-caption text-text-muted" ] [ text "Ei LEGO-tunnuksia" ]
 
               else
-                div [ class "mt-3 space-y-3" ] (List.map (viewCodeLinks item.services) item.codes)
+                div [ class "mt-3 space-y-3" ] (List.map (viewCodeLinks item.services item.catalog) item.codes)
             ]
         ]
 
@@ -1606,7 +1753,7 @@ viewCatalogThumbnail maybeCatalog =
                 , alt ("Setin kuva: " ++ (maybeCatalog |> Maybe.map .name |> Maybe.withDefault ""))
                 , attribute "loading" "lazy"
                 , attribute "referrerpolicy" "no-referrer"
-                , class "mt-3 h-32 w-32 rounded object-contain"
+                , class "float-right ml-4 mb-3 h-32 w-32 rounded object-contain"
                 ]
                 []
 
@@ -1633,10 +1780,26 @@ catalogProviderName provider =
             "Brickset"
 
 
-viewCodeLinks : List Service -> String -> Html Msg
-viewCodeLinks services code =
+viewCodeLinks : List Service -> Maybe Types.SetCatalog -> String -> Html Msg
+viewCodeLinks services maybeCatalog code =
     div [ class "flex flex-wrap items-baseline gap-x-4 gap-y-2" ]
-        ([ span [ class "type-mono" ] [ text code ] ]
+        ([ span [ class "inline-flex items-center gap-2 type-mono" ]
+            ([ text code ]
+                ++ (case catalogYearForCode maybeCatalog code of
+                        Just year ->
+                            [ span [ class "inline-flex items-center gap-1 type-body-small text-text-muted" ]
+                                [ FeatherIcons.calendar
+                                    |> FeatherIcons.withSize 14
+                                    |> FeatherIcons.toHtml [ attribute "aria-hidden" "true", attribute "focusable" "false" ]
+                                , text (String.fromInt year)
+                                ]
+                            ]
+
+                        Nothing ->
+                            []
+                   )
+            )
+         ]
             ++ (if List.isEmpty services then
                     [ span [ class "type-caption text-text-muted" ] [ text "Ei valittuja palveluita" ] ]
 
@@ -1646,6 +1809,19 @@ viewCodeLinks services code =
                         services
                )
         )
+
+
+catalogYearForCode : Maybe Types.SetCatalog -> String -> Maybe Int
+catalogYearForCode maybeCatalog code =
+    maybeCatalog
+        |> Maybe.andThen
+            (\catalog ->
+                if catalog.code == code then
+                    catalog.year
+
+                else
+                    Nothing
+            )
 
 
 itemKindName : ItemKind -> String
@@ -1816,6 +1992,7 @@ viewEditForm model maybeId =
             [ editorTabs model.editorTab
             , div
                 [ attribute "role" "tabpanel"
+                , attribute "tabindex" "0"
                 , id
                     (if model.editorTab == ItemsTab then
                         "editor-panel-items"
@@ -1864,7 +2041,7 @@ viewEditForm model maybeId =
                 [ sharedButton "Tallenna lista" SaveClicked Button.Primary model.saving model.saving
                 , case maybeId of
                     Just _ ->
-                        sharedButton "Poista lista" DeleteClicked Button.Danger model.saving False
+                        deleteListButton model.saving
 
                     Nothing ->
                         text ""
@@ -1894,6 +2071,24 @@ editorTabs activeTab =
                            )
                     )
                 , onClick (SelectEditorTab tab)
+                , attribute "tabindex"
+                    (if isSelected then
+                        "0"
+
+                     else
+                        "-1"
+                    )
+                , preventDefaultOn "keydown"
+                    (Decode.map
+                        (\key ->
+                            if List.member key [ "ArrowLeft", "ArrowRight", "Home", "End" ] then
+                                ( EditorTabKeyPressed key, True )
+
+                            else
+                                ( NoOp, False )
+                        )
+                        (Decode.field "key" Decode.string)
+                    )
                 , attribute "role" "tab"
                 , attribute "aria-selected"
                     (if isSelected then
@@ -1919,6 +2114,7 @@ editorTabs activeTab =
             [ class "flex border-b border-border-default"
             , attribute "role" "tablist"
             , attribute "aria-label" "Listan muokkausosiot"
+            , attribute "aria-orientation" "horizontal"
             ]
             [ tabButton ItemsTab "Teokset" "editor-panel-items"
             , tabButton DescriptionTab "Kuvaus" "editor-panel-description"
@@ -2057,22 +2253,101 @@ iconButton labelText icon message isDisabled =
 
 viewDeleteConfirmation : Bool -> Html Msg
 viewDeleteConfirmation isOpen =
-    div [ class "no-print" ]
-        [ Dialog.view
-            { title = "Poistetaanko lista?"
-            , body = [ p [ class "type-body" ] [ text "Listan poistamista ei voi perua." ] ]
-            , footer =
-                Just
-                    (div [ class "flex justify-end gap-3" ]
-                        [ sharedButton "Peruuta" CancelDelete Button.Secondary False False
-                        , sharedButton "Poista lista" ConfirmDelete Button.Danger False False
+    if not isOpen then
+        text ""
+
+    else
+        div
+            [ class "no-print fixed inset-0 z-50 flex items-center justify-center p-4"
+            , attribute "role" "alertdialog"
+            , attribute "aria-modal" "true"
+            , attribute "aria-labelledby" "delete-dialog-title"
+            , attribute "aria-describedby" "delete-dialog-description"
+            , deleteDialogKeyHandler
+            ]
+            [ div
+                [ class "absolute inset-0 bg-black/50"
+                , attribute "aria-hidden" "true"
+                , onClick CancelDelete
+                ]
+                []
+            , section [ class "relative z-10 w-full max-w-lg rounded-xl bg-white p-6 shadow-xl" ]
+                [ header [ class "mb-4 flex items-center justify-between gap-4" ]
+                    [ h2 [ id "delete-dialog-title", class "type-h3" ] [ text "Poistetaanko lista?" ]
+                    , button
+                        [ type_ "button"
+                        , id "delete-dialog-close"
+                        , class "inline-flex h-11 w-11 items-center justify-center rounded text-text-muted hover:bg-bg-subtle focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand"
+                        , attribute "aria-label" "Sulje"
+                        , onClick CancelDelete
                         ]
-                    )
-            , isOpen = isOpen
-            , onClose = CancelDelete
-            , closeLabel = "Sulje"
-            }
+                        [ FeatherIcons.x |> FeatherIcons.withSize 18 |> FeatherIcons.toHtml [ attribute "aria-hidden" "true", attribute "focusable" "false" ] ]
+                    ]
+                , p [ id "delete-dialog-description", class "type-body" ] [ text "Listan poistamista ei voi perua." ]
+                , div [ class "mt-6 flex flex-wrap justify-end gap-3" ]
+                    [ button
+                        [ type_ "button"
+                        , id "delete-dialog-cancel"
+                        , class "inline-flex min-h-11 items-center justify-center rounded border border-border-default bg-white px-4 py-2 type-body-small font-semibold text-brand hover:bg-bg-subtle focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand"
+                        , onClick CancelDelete
+                        ]
+                        [ text "Peruuta" ]
+                    , button
+                        [ type_ "button"
+                        , id "delete-dialog-confirm"
+                        , class "inline-flex min-h-11 items-center justify-center rounded bg-red-600 px-4 py-2 type-body-small font-semibold text-white hover:bg-red-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-red-500"
+                        , onClick ConfirmDelete
+                        ]
+                        [ text "Poista lista" ]
+                    ]
+                ]
+            ]
+
+
+deleteDialogKeyHandler : Html.Attribute Msg
+deleteDialogKeyHandler =
+    preventDefaultOn "keydown"
+        (Decode.map3
+            (\key shiftKey targetId ->
+                if key == "Escape" then
+                    ( CancelDelete, True )
+
+                else if key == "Tab" && shiftKey && targetId == "delete-dialog-close" then
+                    ( FocusDeleteDialog "delete-dialog-confirm", True )
+
+                else if key == "Tab" && not shiftKey && targetId == "delete-dialog-confirm" then
+                    ( FocusDeleteDialog "delete-dialog-close", True )
+
+                else
+                    ( NoOp, False )
+            )
+            (Decode.field "key" Decode.string)
+            (Decode.field "shiftKey" Decode.bool)
+            (Decode.at [ "target", "id" ] Decode.string)
+        )
+
+
+deleteListButton : Bool -> Html Msg
+deleteListButton isDisabled =
+    button
+        [ type_ "button"
+        , id "delete-list-button"
+        , disabled isDisabled
+        , class "inline-flex min-h-11 items-center justify-center rounded bg-red-600 px-4 py-2 type-body-small font-semibold text-white hover:bg-red-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-red-500 disabled:cursor-not-allowed disabled:opacity-50"
+        , onClick DeleteClicked
         ]
+        [ text "Poista lista" ]
+
+
+deleteSetButton : Int -> String -> Html Msg
+deleteSetButton index itemTitle =
+    button
+        [ type_ "button"
+        , class "inline-flex min-h-11 items-center justify-center rounded bg-red-600 px-4 py-2 type-body-small font-semibold text-white transition-all hover:bg-red-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-red-500"
+        , attribute "aria-label" ("Poista kohde: " ++ itemTitle)
+        , onClick (RemoveSet index)
+        ]
+        [ text "Poista" ]
 
 
 fieldLabel : String -> String -> Html Msg -> Html Msg
@@ -2101,10 +2376,11 @@ viewEditSet model previewIds items index item =
     in
     section [ class "overflow-hidden rounded-lg border border-border-default bg-white" ]
         [ div [ class "flex flex-wrap items-center gap-2 p-3" ]
-            [ iconButton "Siirrä ylemmäs" FeatherIcons.arrowUp (MoveSet index (index - 1)) (index == 0)
-            , iconButton "Siirrä alemmas" FeatherIcons.arrowDown (MoveSet index (index + 1)) (index == List.length items - 1)
+            [ iconButton ("Siirrä ylemmäs: " ++ itemTitle) FeatherIcons.arrowUp (MoveSet index (index - 1)) (index == 0)
+            , iconButton ("Siirrä alemmas: " ++ itemTitle) FeatherIcons.arrowDown (MoveSet index (index + 1)) (index == List.length items - 1)
             , button
                 [ type_ "button"
+                , id ("edit-set-toggle-" ++ String.fromInt index)
                 , class "flex min-w-0 flex-1 items-center justify-start gap-3 rounded p-2 text-left hover:bg-bg-subtle focus-visible:outline focus-visible:outline-2 focus-visible:outline-brand"
                 , onClick (ToggleSetAccordion index)
                 , attribute "aria-expanded"
@@ -2115,6 +2391,15 @@ viewEditSet model previewIds items index item =
                         "false"
                     )
                 , attribute "aria-controls" detailsId
+                , attribute "aria-label"
+                    ((if isOpen then
+                        "Sulje kohde: "
+
+                      else
+                        "Avaa kohde: "
+                     )
+                        ++ itemTitle
+                    )
                 , attribute "title"
                     ((if isOpen then
                         "Sulje kohde: "
@@ -2137,7 +2422,7 @@ viewEditSet model previewIds items index item =
                         |> FeatherIcons.toHtml [ attribute "focusable" "false" ]
                     ]
                 ]
-            , sharedButton "Poista" (RemoveSet index) Button.Danger False False
+            , deleteSetButton index itemTitle
             ]
         , if isOpen then
             div [ id detailsId, class "space-y-4 border-t border-border-default p-4" ]
@@ -2200,6 +2485,13 @@ viewSetSearch model index item =
         query =
             Dict.get index model.setSearchQueries |> Maybe.withDefault ""
 
+        itemLabel =
+            if String.trim item.title == "" then
+                itemKindName item.kind
+
+            else
+                item.title
+
         searchState =
             Dict.get index model.setSearchStates
 
@@ -2213,6 +2505,28 @@ viewSetSearch model index item =
 
         expanded =
             not (List.isEmpty suggestions)
+
+        activeSuggestionIndex =
+            Dict.get index model.activeSuggestions |> Maybe.withDefault 0
+
+        keyboardAttributes =
+            if expanded then
+                [ preventDefaultOn "keydown"
+                    (Decode.map2
+                        (\key ctrlKey ->
+                            if List.member key [ "ArrowDown", "ArrowUp", "Enter", "Escape" ] && not (ctrlKey && key == "Enter") then
+                                ( SetSearchKeyPressed index key, True )
+
+                            else
+                                ( NoOp, False )
+                        )
+                        (Decode.field "key" Decode.string)
+                        (Decode.field "ctrlKey" Decode.bool)
+                    )
+                ]
+
+            else
+                []
 
         status =
             case searchState of
@@ -2265,7 +2579,7 @@ viewSetSearch model index item =
                 Nothing ->
                     p [ class "type-caption text-text-muted" ] [ text "Hae Rebrickablesta nimellä tai setin tunnuksella." ]
 
-        suggestionButton requestId suggestion =
+        suggestionOption requestId suggestionIndex suggestion =
             let
                 metadata =
                     [ Just suggestion.code
@@ -2275,18 +2589,29 @@ viewSetSearch model index item =
                         |> List.filterMap identity
                         |> String.join " · "
             in
-            li [ attribute "role" "presentation" ]
-                [ button
-                    [ type_ "button"
-                    , class "flex w-full flex-col items-start gap-1 px-3 py-2 text-left hover:bg-bg-subtle focus-visible:ring-2 focus-visible:ring-brand"
-                    , onClick (SetSuggestionSelected index requestId suggestion)
-                    , attribute "role" "option"
-                    , attribute "aria-selected" "false"
-                    , attribute "title" (suggestion.name ++ " (" ++ suggestion.code ++ ")")
-                    ]
-                    [ span [ class "type-body-small" ] [ text suggestion.name ]
-                    , span [ class "type-caption text-text-muted" ] [ text metadata ]
-                    ]
+            li
+                [ id (inputId ++ "-option-" ++ String.fromInt suggestionIndex)
+                , class
+                    ("cursor-pointer px-3 py-2 "
+                        ++ (if suggestionIndex == activeSuggestionIndex then
+                                "bg-bg-subtle"
+
+                            else
+                                "hover:bg-bg-subtle"
+                           )
+                    )
+                , onClick (SetSuggestionSelected index requestId suggestion)
+                , attribute "role" "option"
+                , attribute "aria-selected"
+                    (if suggestionIndex == activeSuggestionIndex then
+                        "true"
+
+                     else
+                        "false"
+                    )
+                ]
+                [ span [ class "block type-body-small" ] [ text suggestion.name ]
+                , span [ class "block type-caption text-text-muted" ] [ text metadata ]
                 ]
 
         suggestionsView =
@@ -2302,7 +2627,7 @@ viewSetSearch model index item =
                             , attribute "role" "listbox"
                             , attribute "aria-label" "Rebrickable-settiehdotukset"
                             ]
-                            (List.map (suggestionButton requestId) results)
+                            (List.indexedMap (suggestionOption requestId) results)
 
                 _ ->
                     text ""
@@ -2356,24 +2681,33 @@ viewSetSearch model index item =
     div [ class "relative space-y-2" ]
         [ label [ class "block type-body-small", attribute "for" inputId ] [ text "Hae settiä" ]
         , input
-            [ id inputId
-            , type_ "search"
-            , value query
-            , onInput (SetSearchChanged index)
-            , placeholder "Esim. Millennium Falcon tai 6285"
-            , attribute "autocomplete" "off"
-            , attribute "role" "combobox"
-            , attribute "aria-autocomplete" "list"
-            , attribute "aria-controls" listId
-            , attribute "aria-expanded"
+            ([ id inputId
+             , type_ "search"
+             , value query
+             , onInput (SetSearchChanged index)
+             , placeholder "Esim. Millennium Falcon tai 6285"
+             , attribute "autocomplete" "off"
+             , attribute "role" "combobox"
+             , attribute "aria-autocomplete" "list"
+             , attribute "aria-label" ("Hae settiä kohteelle: " ++ itemLabel)
+             , attribute "aria-controls" listId
+             , attribute "aria-expanded"
                 (if expanded then
                     "true"
 
                  else
                     "false"
                 )
-            , class inputClass
-            ]
+             , class inputClass
+             ]
+                ++ (if expanded then
+                        [ attribute "aria-activedescendant" (inputId ++ "-option-" ++ String.fromInt activeSuggestionIndex) ]
+
+                    else
+                        []
+                   )
+                ++ keyboardAttributes
+            )
             []
         , status
         , suggestionsView

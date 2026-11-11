@@ -23,4 +23,4 @@ jobs:
       - name: Check the deployed static shell
         run: bash scripts/smoke-test.sh
         env:
-          SITE_URL: https://listat.palikkaharrastajat.fi
+          SITE_URL: https://esite.palikkaharrastajat.fi
