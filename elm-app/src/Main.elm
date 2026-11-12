@@ -2425,8 +2425,8 @@ catalogProviderName provider =
 
 viewCodeLinks : List Service -> Dict String Types.SetCatalog -> String -> Html Msg
 viewCodeLinks services catalogsByCode code =
-    div [ class "flex flex-wrap items-baseline gap-x-4 gap-y-2" ]
-        ([ span [ class "inline-flex items-center gap-2 type-mono" ]
+    div [ class "flex flex-wrap items-center gap-x-4 gap-y-2" ]
+        [ span [ class "inline-flex items-center gap-2 type-mono" ]
             ([ FeatherIcons.package
                 |> FeatherIcons.withSize 14
                 |> FeatherIcons.toHtml [ attribute "aria-hidden" "true", attribute "focusable" "false", SvgA.class "text-text-muted" ]
@@ -2446,16 +2446,16 @@ viewCodeLinks services catalogsByCode code =
                             []
                    )
             )
-         ]
-            ++ (if List.isEmpty services then
-                    [ span [ class "type-caption text-text-muted" ] [ text "Ei valittuja palveluita" ] ]
+        , if List.isEmpty services then
+            span [ class "type-caption text-text-muted self-center" ] [ text "Ei valittuja palveluita" ]
 
-                else
-                    List.map
-                        (\service -> a [ href (Api.serviceHref service code), target "_blank", attribute "rel" "noopener noreferrer", class "no-print type-body-small text-brand underline" ] [ text (Types.serviceName service) ])
-                        services
-               )
-        )
+          else
+            div [ class "relative -top-px flex flex-wrap items-center gap-x-4 gap-y-2 self-center" ]
+                (List.map
+                    (\service -> a [ href (Api.serviceHref service code), target "_blank", attribute "rel" "noopener noreferrer", class "no-print type-body-small text-brand underline" ] [ text (Types.serviceName service) ])
+                    services
+                )
+        ]
 
 
 catalogYearForCode : Dict String Types.SetCatalog -> String -> Maybe Int
