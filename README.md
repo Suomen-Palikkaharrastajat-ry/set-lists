@@ -54,9 +54,9 @@ cover image, and up to five optional protected gallery photos (`photo_01` to
 require at least one code, while MOC codes are optional and may contain multiple
 strings. The optional item URL accepts only absolute HTTP(S) addresses. Array
 order is the display order, and each item's `services` selection applies to every
-code on that item. List-level Markdown is labeled “Kuvaus” and shown directly
-below the title. The top-level `description` field remains stored but is currently
-hidden from the UI and preserved when an existing list is edited.
+code on that item. The top-level `description` field is edited as “Alaotsikko” and
+shown below the title when non-empty. List-level Markdown is labeled “Kuvaus” and
+shown below the title and optional subtitle.
 
 Accepted `catalog` snapshots store provider metadata in the existing JSON item.
 They are cleared when the item's first valid lookup code changes. Public pages

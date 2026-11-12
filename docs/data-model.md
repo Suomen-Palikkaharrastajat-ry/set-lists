@@ -84,10 +84,10 @@ permit published reads and owner reads. Create requires the authenticated user
 id in `owner`; update and delete are restricted to the owner, and update rejects
 owner changes.
 
-The top-level `description` field remains in the record schema and is preserved
-when editing existing lists, but is currently hidden from the UI. The list-level
-`content` field is Markdown, labeled “Kuvaus”, and appears directly below the
-list title.
+The top-level `description` field is an optional plain-text subtitle, edited as
+“Alaotsikko” and shown below the list title when non-empty. It is a single-line
+input in the editor. The list-level `content` field is Markdown, labeled
+“Kuvaus”, and appears below the title and optional subtitle.
 
 `owner` is included in PocketBase record responses, including public reads of
 published lists. The rules restrict which records can be read; they do not mask

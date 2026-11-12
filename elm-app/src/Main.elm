@@ -214,6 +214,7 @@ type Msg
     | HomeListsLoaded String (Result Http.Error Api.ListPage)
     | ListLoaded String (Result Http.Error ListRecord)
     | TitleChanged String
+    | DescriptionChanged String
     | MarkdownChanged String
     | SetSearchChanged Int String
     | SetSearchKeyPressed Int String
@@ -920,6 +921,9 @@ update msg model =
 
         TitleChanged title ->
             ( mapForm (\form -> { form | title = title }) model, Cmd.none )
+
+        DescriptionChanged description ->
+            ( mapForm (\form -> { form | description = description }) model, Cmd.none )
 
         MarkdownChanged markdown ->
             ( mapForm (\form -> { form | markdown = markdown }) model, Cmd.none )
@@ -2166,6 +2170,11 @@ viewListDetail model owned record =
                 ([ div [ class "min-w-0 flex-1 flow-root" ]
                     [ viewListPhoto model record
                     , h1 [ class "type-h1" ] [ text record.title ]
+                    , if String.trim record.description == "" then
+                        text ""
+
+                      else
+                        p [ class "type-body text-text-muted" ] [ text (String.trim record.description) ]
                     , viewMarkdown record.markdown
                     ]
                  ]
@@ -2418,7 +2427,11 @@ viewCodeLinks : List Service -> Dict String Types.SetCatalog -> String -> Html M
 viewCodeLinks services catalogsByCode code =
     div [ class "flex flex-wrap items-baseline gap-x-4 gap-y-2" ]
         ([ span [ class "inline-flex items-center gap-2 type-mono" ]
-            ([ text code ]
+            ([ FeatherIcons.package
+                |> FeatherIcons.withSize 14
+                |> FeatherIcons.toHtml [ attribute "aria-hidden" "true", attribute "focusable" "false", SvgA.class "text-text-muted" ]
+             , text code
+             ]
                 ++ (case catalogYearForCode catalogsByCode code of
                         Just year ->
                             [ span [ class "inline-flex items-center gap-1 type-body-small text-text-muted" ]
@@ -2618,7 +2631,13 @@ viewEditForm model maybeId =
                 |> Button.toHtml
             ]
         , div [ class "space-y-6 rounded-lg bg-white" ]
-            [ editorTabs model.editorTab
+            [ Form.textInput (Form.defaultField "title" "Listan otsikko")
+                { value = model.form.title
+                , onInput = TitleChanged
+                , inputType = Form.Text
+                , placeholder = Just "Esim. Keskiaikaiset linnat"
+                }
+            , editorTabs model.editorTab
             , div
                 [ attribute "role" "tabpanel"
                 , attribute "tabindex" "0"
@@ -2631,11 +2650,11 @@ viewEditForm model maybeId =
 
                     DescriptionTab ->
                         div [ class "space-y-4" ]
-                            [ Form.textInput (Form.defaultField "title" "Listan otsikko")
-                                { value = model.form.title
-                                , onInput = TitleChanged
+                            [ Form.textInput (Form.defaultField "description" "Alaotsikko")
+                                { value = model.form.description
+                                , onInput = DescriptionChanged
                                 , inputType = Form.Text
-                                , placeholder = Just "Esim. Keskiaikaiset linnat"
+                                , placeholder = Nothing
                                 }
                             , markdownEditor (List.member "list-markdown" model.markdownPreviewIds) "list-markdown" "Kuvaus" model.form.markdown MarkdownChanged
                             , viewPhotoSlotEditor model maybeId Types.coverPhotoSlot "Listan kansikuva"
