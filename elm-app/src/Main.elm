@@ -2009,8 +2009,14 @@ viewListCard record =
             ]
         , p [ class "mt-2 type-caption text-text-muted" ] [ text (String.fromInt (List.length record.items) ++ " settiä") ]
         , div [ class "mt-4 flex flex-wrap gap-3" ]
-            [ a [ href (Route.toHref (Route.PublicList record.id)), class "text-brand underline" ] [ text "Avaa" ]
-            , a [ href (Route.toHref (Route.EditList (Just record.id))), class "text-brand underline" ] [ text "Muokkaa" ]
+            [ Button.link { label = "Avaa", href = Route.toHref (Route.PublicList record.id) }
+                |> Button.withVariant Button.Primary
+                |> Button.withSize Button.Small
+                |> Button.toHtml
+            , Button.link { label = "Muokkaa", href = Route.toHref (Route.EditList (Just record.id)) }
+                |> Button.withVariant Button.Secondary
+                |> Button.withSize Button.Small
+                |> Button.toHtml
             ]
         ]
 
@@ -2112,7 +2118,7 @@ viewListDetail model owned record =
 
         containerClass =
             if authenticated then
-                "print-list mx-auto max-w-3xl rounded-lg border border-border-default bg-white p-5 shadow-sm sm:p-8"
+                "print-list mx-auto max-w-3xl bg-white p-0 sm:rounded-lg sm:border sm:border-border-default sm:p-8 sm:shadow-sm"
 
             else
                 "print-list anonymous-list mx-auto max-w-3xl bg-white p-0 sm:p-2"
@@ -2473,7 +2479,7 @@ viewMarkdown markdown =
         text ""
 
     else
-        section [ class "markdown-content mt-8 max-w-none border-t border-border-default pt-6 type-body" ] (markdownNodes markdown)
+        section [ class "markdown-content mt-8 max-w-none type-body" ] (markdownNodes markdown)
 
 
 viewItemMarkdown : String -> Html Msg
@@ -2606,7 +2612,10 @@ viewEditForm model maybeId =
                     ]
                 , p [ class "mt-2 type-body text-text-muted" ] [ text "Järjestä teokset ja täydennä listan kuvaus." ]
                 ]
-            , a [ href "#/", class "text-brand underline" ] [ text "Peruuta" ]
+            , Button.link { label = "Peruuta", href = "#/" }
+                |> Button.withVariant Button.Secondary
+                |> Button.withSize Button.Small
+                |> Button.toHtml
             ]
         , div [ class "space-y-6 rounded-lg bg-white" ]
             [ editorTabs model.editorTab

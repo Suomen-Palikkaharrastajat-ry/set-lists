@@ -31,7 +31,6 @@
   #main-content { width: auto !important; max-width: none !important; min-height: 0 !important; margin: 0 !important; padding: 0 !important; }
   .print-list { display: block !important; width: auto !important; max-width: none !important; min-height: 0 !important; margin: 0 !important; padding: 0 !important; box-shadow: none !important; border: 0 !important; }
   .print-list a { color: inherit !important; text-decoration: none !important; }
-  .print-list .markdown-content { border-top: 0 !important; padding-top: 0 !important; }
   .print-break { break-inside: avoid; }
   .print-items { margin-top: 1.25rem !important; }
   .print-items > * + * { border-top-width: 0 !important; }
