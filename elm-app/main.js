@@ -40,8 +40,9 @@ const MAX_SET_IMAGE_BYTES = 1_000_000
 const MAX_LIST_PHOTO_BYTES = 20_000_000
 const MAX_THUMBNAIL_BYTES = 200_000
 const CROP_PREVIEW_MAX_DIMENSION = 1024
+const LIST_PHOTO_SLOTS = ['photo', 'photo_01', 'photo_02', 'photo_03', 'photo_04', 'photo_05']
 const setSearchTimers = new Map()
-let pendingListCover = null
+let pendingListPhoto = null
 app.ports.scheduleSetSearch.subscribe((payload) => {
   const previous = setSearchTimers.get(payload.index)
   if (previous) clearTimeout(previous)
@@ -182,6 +183,13 @@ app.ports.processSetThumbnail.subscribe(async (payload) => {
   })
 })
 
+async function authenticatedPocketBase(pbBaseUrl, token) {
+  const PocketBase = (await import('pocketbase')).default
+  const pb = new PocketBase(pbBaseUrl)
+  pb.authStore.save(token, null)
+  return pb
+}
+
 app.ports.prepareListPhoto.subscribe(async (payload) => {
   const input = document.getElementById(payload.inputId)
   let previewUrl = ''
@@ -189,10 +197,11 @@ app.ports.prepareListPhoto.subscribe(async (payload) => {
   let height = 0
   let errorCode = ''
   let failureStage = 'validation'
-  pendingListCover = null
+  pendingListPhoto = null
 
   try {
     if (!/^[a-z0-9]{10,20}$/i.test(payload.listId)) throw new Error('Invalid list id')
+    if (!LIST_PHOTO_SLOTS.includes(payload.slot)) throw new Error('Invalid photo slot')
     const sourceFile = input?.files?.[0]
     if (!sourceFile || (sourceFile.type && !sourceFile.type.startsWith('image/'))) {
       errorCode = 'unsupported-image'
@@ -212,7 +221,7 @@ app.ports.prepareListPhoto.subscribe(async (payload) => {
       previewUrl = canvas.toDataURL('image/webp', 0.9)
       width = preview.width
       height = preview.height
-      pendingListCover = { listId: payload.listId, canvas }
+      pendingListPhoto = { listId: payload.listId, slot: payload.slot, canvas }
     } finally {
       decoded.release()
     }
@@ -223,16 +232,16 @@ app.ports.prepareListPhoto.subscribe(async (payload) => {
     if (input) input.value = ''
   }
 
-  app.ports.listPhotoPrepared.send({ listId: payload.listId, previewUrl, width, height, error: errorCode })
+  app.ports.listPhotoPrepared.send({ listId: payload.listId, slot: payload.slot, previewUrl, width, height, error: errorCode })
 })
 
 app.ports.cancelListPhotoPreparation.subscribe((payload) => {
-  if (pendingListCover?.listId === payload.listId) pendingListCover = null
+  if (pendingListPhoto?.listId === payload.listId) pendingListPhoto = null
 })
 
 app.ports.applyListPhoto.subscribe(async (payload) => {
-  const cover = pendingListCover
-  pendingListCover = null
+  const pending = pendingListPhoto
+  pendingListPhoto = null
   let photo = ''
   let fileToken = ''
   let errorCode = ''
@@ -240,21 +249,20 @@ app.ports.applyListPhoto.subscribe(async (payload) => {
 
   try {
     if (!/^[a-z0-9]{10,20}$/i.test(payload.listId)) throw new Error('Invalid list id')
-    if (!cover || cover.listId !== payload.listId) throw new Error('Prepared photo is missing')
+    if (!LIST_PHOTO_SLOTS.includes(payload.slot)) throw new Error('Invalid photo slot')
+    if (!pending || pending.listId !== payload.listId || pending.slot !== payload.slot) throw new Error('Prepared photo is missing')
 
-    const region = validateCropRegion(cover.canvas.width, cover.canvas.height, payload.crop)
+    const region = validateCropRegion(pending.canvas.width, pending.canvas.height, payload.crop)
     const output = thumbnailDimensions(region.width, region.height)
-    const webp = await encodeCanvasWebp(drawRegionToCanvas(cover.canvas, region, output.width, output.height))
-    const file = new File([webp], 'list-cover.webp', { type: 'image/webp' })
+    const webp = await encodeCanvasWebp(drawRegionToCanvas(pending.canvas, region, output.width, output.height))
+    const file = new File([webp], `list-${payload.slot.replace('_', '-')}.webp`, { type: 'image/webp' })
     const formData = new FormData()
-    formData.append('photo', file)
+    formData.append(payload.slot, file)
 
     failureStage = 'PocketBase upload'
-    const PocketBase = (await import('pocketbase')).default
-    const pb = new PocketBase(payload.pbBaseUrl)
-    pb.authStore.save(payload.token, null)
+    const pb = await authenticatedPocketBase(payload.pbBaseUrl, payload.token)
     const record = await pb.collection('table_catalogs').update(payload.listId, formData)
-    photo = typeof record.photo === 'string' ? record.photo : ''
+    photo = typeof record[payload.slot] === 'string' ? record[payload.slot] : ''
     if (photo) {
       try {
         fileToken = await pb.files.getToken()
@@ -267,32 +275,29 @@ app.ports.applyListPhoto.subscribe(async (payload) => {
     if (!errorCode) errorCode = 'processing-failed'
   }
 
-  app.ports.listPhotoProcessed.send({ listId: payload.listId, photo, fileToken, error: errorCode })
+  app.ports.listPhotoProcessed.send({ listId: payload.listId, slot: payload.slot, photo, fileToken, error: errorCode })
 })
 
 app.ports.clearListPhoto.subscribe(async (payload) => {
   let error = ''
   try {
     if (!/^[a-z0-9]{10,20}$/i.test(payload.listId)) throw new Error('Invalid list id')
+    if (!LIST_PHOTO_SLOTS.includes(payload.slot)) throw new Error('Invalid photo slot')
 
-    const PocketBase = (await import('pocketbase')).default
-    const pb = new PocketBase(payload.pbBaseUrl)
-    pb.authStore.save(payload.token, null)
-    await pb.collection('table_catalogs').update(payload.listId, { photo: '' })
+    const pb = await authenticatedPocketBase(payload.pbBaseUrl, payload.token)
+    await pb.collection('table_catalogs').update(payload.listId, { [payload.slot]: '' })
   } catch (cause) {
-    console.error('List cover removal failed', cause)
+    console.error('List photo removal failed', cause)
     error = 'removal-failed'
   }
 
-  app.ports.listPhotoCleared.send({ listId: payload.listId, error })
+  app.ports.listPhotoCleared.send({ listId: payload.listId, slot: payload.slot, error })
 })
 
 app.ports.requestListPhotoFileToken.subscribe(async (payload) => {
   let token = ''
   try {
-    const PocketBase = (await import('pocketbase')).default
-    const pb = new PocketBase(payload.pbBaseUrl)
-    pb.authStore.save(payload.token, null)
+    const pb = await authenticatedPocketBase(payload.pbBaseUrl, payload.token)
     token = await pb.files.getToken()
   } catch (_) {
     // Public published photos are also authorized by the collection's view rule.

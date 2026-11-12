@@ -61,6 +61,13 @@ publish their ports; keep those bind addresses when changing their commands.
   metadata, limited to a 256px maximum edge and 200 KB, and authorized through
   PocketBase's list view rule/file token. Apply the cover-photo migration before
   deploying the frontend.
+- Up to five optional gallery photos (`table_catalogs.photo_01` to
+  `photo_05`) follow the same rules. Items store only the selected slot names in
+  their `photos` array, never filenames or URLs; the decoder keeps only known
+  slots. Clearing a slot also unselects it from every item in the editor.
+  Published gallery files are reachable under the record's view rule even when
+  no item selects them; item selections only control display. Apply the gallery
+  migration (`1794463444_table_catalogs_gallery`) before deploying the frontend.
 - Keep `robots.txt` disallowing all crawlers and the document metadata noindex.
 - Apply the PocketBase migration before using a fresh local instance. Local
   development uses password login against loopback PocketBase and requires a
@@ -75,6 +82,10 @@ publish their ports; keep those bind addresses when changing their commands.
 - Drafts are private; published list routes work signed out.
 - An owner can upload a cover from a camera or image picker; published covers
   display to signed-out visitors, while draft covers remain protected.
+- The Photos tab manages all five gallery slots: each uploads, crops, replaces,
+  and clears independently. Items list only saved slots, and a selected gallery
+  photo appears beside the set thumbnails on published lists, while draft
+  gallery photos stay hidden from signed-out visitors.
 - Anonymous published-list views have a non-linked logo bar only, no status or
   container borders, actions, QR section, or footer; check mobile width.
 - Each set displays only its selected provider links.

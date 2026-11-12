@@ -3,6 +3,7 @@ module Api exposing (ListPage, LookupProvider(..), SetLookupResult, SetSuggestio
 {-| PocketBase list API, JSON codecs, and service-specific set search links.
 -}
 
+import Dict exposing (Dict)
 import Http
 import Json.Decode as Decode exposing (Decoder)
 import Json.Encode as Encode
@@ -132,7 +133,7 @@ decodeList =
             , status = status
             , owner = owner
             , updated = updated
-            , photo = Nothing
+            , savedPhotos = Dict.empty
             }
         )
         (Decode.field "id" Decode.string)
@@ -145,25 +146,33 @@ decodeList =
         (Decode.maybe (Decode.field "updated" Decode.string) |> Decode.map (Maybe.withDefault ""))
         |> Decode.andThen
             (\record ->
-                Decode.map (\photo -> { record | photo = photo })
-                    (Decode.maybe (Decode.field "photo" Decode.string)
-                        |> Decode.map
-                            (Maybe.andThen
-                                (\filename ->
-                                    if String.trim filename == "" then
-                                        Nothing
-
-                                    else
-                                        Just filename
-                                )
-                            )
-                    )
+                Decode.map (\fields -> { record | savedPhotos = savedPhotosFromFields fields })
+                    (Decode.dict Decode.value)
             )
 
 
-photoUrl : String -> Maybe String -> ListRecord -> Maybe String
-photoUrl baseUrl maybeFileToken record =
-    record.photo
+savedPhotosFromFields : Dict String Decode.Value -> Dict String String
+savedPhotosFromFields fields =
+    Types.photoSlots
+        |> List.filterMap
+            (\slot ->
+                Dict.get slot fields
+                    |> Maybe.andThen (\value -> Decode.decodeValue Decode.string value |> Result.toMaybe)
+                    |> Maybe.andThen
+                        (\filename ->
+                            if String.trim filename == "" then
+                                Nothing
+
+                            else
+                                Just ( slot, filename )
+                        )
+            )
+        |> Dict.fromList
+
+
+photoUrl : String -> Maybe String -> ListRecord -> String -> Maybe String
+photoUrl baseUrl maybeFileToken record slot =
+    Types.savedPhotoFilename slot record
         |> Maybe.map
             (\filename ->
                 baseUrl
@@ -180,8 +189,8 @@ photoUrl baseUrl maybeFileToken record =
 
 decodeSetItem : Decoder SetItem
 decodeSetItem =
-    Decode.map7
-        (\title codes kind services description url catalogValue ->
+    Decode.map8
+        (\title codes kind services description url catalogValue photos ->
             let
                 normalizedCodes =
                     List.map String.trim codes |> List.filter ((/=) "")
@@ -195,6 +204,7 @@ decodeSetItem =
                     , description = Maybe.withDefault "" description
                     , url = url |> Maybe.andThen MarkdownSafety.safeWebUrl |> Maybe.withDefault ""
                     , catalog = Nothing
+                    , photos = Types.normalizePhotoSlots (Maybe.withDefault [] photos)
                     }
             in
             { item | catalog = catalogValue |> Maybe.andThen (decodeCatalog item) }
@@ -206,6 +216,7 @@ decodeSetItem =
         (Decode.maybe (Decode.field "description" Decode.string))
         (Decode.maybe (Decode.field "url" Decode.string))
         (Decode.maybe (Decode.field "catalog" Decode.value))
+        (Decode.maybe (Decode.field "photos" (Decode.list Decode.string)))
 
 
 decodeCatalog : SetItem -> Decode.Value -> Maybe SetCatalog
@@ -380,6 +391,13 @@ encodeSetItem item =
 
                     Nothing ->
                         []
+               )
+            ++ (case Types.normalizePhotoSlots item.photos of
+                    [] ->
+                        []
+
+                    photos ->
+                        [ ( "photos", Encode.list Encode.string photos ) ]
                )
             ++ (item.catalog |> Maybe.andThen (validateCatalog item) |> Maybe.map encodeCatalog |> Maybe.map (\catalog -> [ ( "catalog", catalog ) ]) |> Maybe.withDefault [])
 

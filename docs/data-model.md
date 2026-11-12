@@ -10,6 +10,7 @@
   "services": ["lego", "brickset", "bricklink"],
   "description": "Optional **Markdown** description",
   "url": "https://example.com/reference",
+  "photos": ["photo_01", "photo_03"],
   "catalog": {
     "provider": "rebrickable",
     "code": "75192-1",
@@ -21,15 +22,31 @@
 }
 ```
 
-The record also has an optional `photo` PocketBase file-field filename. It is not
-part of the JSON list form and is uploaded separately after the list record has
-been created. The editor accepts a camera photo or image file, decodes and
-re-encodes it as WebP, strips EXIF/XMP/ICC metadata, scales its longest edge to
-256 pixels without upscaling, and caps the result at 200 KB. The field is
-protected: its file access is checked against the `table_catalogs` view rule, so
-published list photos work anonymously while private draft photos require an
-owner file token. The optional field is added by
-`fixtures/pb_migrations/1794377044_table_catalogs_photo.js`.
+The record also has an optional `photo` PocketBase file-field filename for the
+cover, and five optional gallery file fields, `photo_01` through `photo_05`. These
+are not part of the JSON list form and are uploaded separately after the list
+record has been created. The cover is edited on the Description tab; the gallery
+is edited on the Photos tab. The editor accepts a camera photo or image file,
+decodes and re-encodes it as WebP, strips EXIF/XMP/ICC metadata, scales its
+longest edge to 256 pixels without upscaling, and caps the result at 200 KB. The
+source file may be up to 20 MB. All six fields are protected: their file access is
+checked against the `table_catalogs` view rule, so published photos work
+anonymously while private draft photos require an owner file token. The cover
+field is added by `fixtures/pb_migrations/1794377044_table_catalogs_photo.js`; the
+gallery fields by `fixtures/pb_migrations/1794463444_table_catalogs_gallery.js`.
+
+An item's optional `photos` array lists gallery slot names (`photo_01` to
+`photo_05`), never filenames or URLs. Decoding keeps only known slots, without
+duplicates, in gallery order; the array is omitted when empty. The item editor
+offers the saved gallery slots of the list being edited. Public rendering shows a
+selected slot's photo beside the item's set thumbnails, and skips slots that are
+currently empty. Clearing a gallery slot also unselects it from every item in the
+editor, so refilling the slot later does not reselect it; the change is stored
+with the next list save.
+
+The gallery file fields are protected, and a published list's photo files are
+reachable under the record's view rule even when no item selects them. Item
+`photos` only control presentation; they are not an access list.
 
 `title` is required for every item and is shown as its heading. `type` is `set` (the default), `altbuild`, or `moc`. Set and alternate-build
 items require at least one code; MOCs may have zero or more codes. The chosen

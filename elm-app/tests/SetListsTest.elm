@@ -4,6 +4,7 @@ module SetListsTest exposing (suite)
 -}
 
 import Api
+import Dict
 import Expect
 import Json.Decode as Decode
 import Json.Encode as Encode
@@ -41,9 +42,9 @@ suite =
                             , description = ""
                             , markdown = ""
                             , items =
-                                [ { title = "Millennium Falcon", codes = [ "75192-1", "75192-2" ], codesText = "75192-1\n75192-2", kind = Set, services = [ Lego, Bricklink ], description = "**Great set**", url = "https://example.com/info", catalog = Nothing }
-                                , { title = "TIE Fighter alternate build", codes = [ "10305-1" ], codesText = "10305-1", kind = AltBuild, services = [], description = "", url = "", catalog = Nothing }
-                                , { title = "My MOC", codes = [ "MOC-123" ], codesText = "MOC-123", kind = Moc, services = [ Brickset ], description = "", url = "", catalog = Nothing }
+                                [ { title = "Millennium Falcon", codes = [ "75192-1", "75192-2" ], codesText = "75192-1\n75192-2", kind = Set, services = [ Lego, Bricklink ], description = "**Great set**", url = "https://example.com/info", catalog = Nothing, photos = [] }
+                                , { title = "TIE Fighter alternate build", codes = [ "10305-1" ], codesText = "10305-1", kind = AltBuild, services = [], description = "", url = "", catalog = Nothing, photos = [] }
+                                , { title = "My MOC", codes = [ "MOC-123" ], codesText = "MOC-123", kind = Moc, services = [ Brickset ], description = "", url = "", catalog = Nothing, photos = [] }
                                 ]
                             , status = Published
                             }
@@ -55,9 +56,9 @@ suite =
                                 (Decode.field "items" (Decode.list Api.decodeSetItem))
                             |> Expect.equal
                                 (Ok
-                                    [ { title = "Millennium Falcon", codes = [ "75192-1", "75192-2" ], codesText = "75192-1\n75192-2", kind = Set, services = [ Lego, Bricklink ], description = "**Great set**", url = "https://example.com/info", catalog = Nothing }
-                                    , { title = "TIE Fighter alternate build", codes = [ "10305-1" ], codesText = "10305-1", kind = AltBuild, services = [], description = "", url = "", catalog = Nothing }
-                                    , { title = "My MOC", codes = [ "MOC-123" ], codesText = "MOC-123", kind = Moc, services = [ Brickset ], description = "", url = "", catalog = Nothing }
+                                    [ { title = "Millennium Falcon", codes = [ "75192-1", "75192-2" ], codesText = "75192-1\n75192-2", kind = Set, services = [ Lego, Bricklink ], description = "**Great set**", url = "https://example.com/info", catalog = Nothing, photos = [] }
+                                    , { title = "TIE Fighter alternate build", codes = [ "10305-1" ], codesText = "10305-1", kind = AltBuild, services = [], description = "", url = "", catalog = Nothing, photos = [] }
+                                    , { title = "My MOC", codes = [ "MOC-123" ], codesText = "MOC-123", kind = Moc, services = [ Brickset ], description = "", url = "", catalog = Nothing, photos = [] }
                                     ]
                                 )
                     , \_ ->
@@ -76,7 +77,7 @@ suite =
                     , description = ""
                     , markdown = ""
                     , status = Draft
-                    , items = [ { title = "Unsafe URL", codes = [], codesText = "", kind = Set, services = [], description = "", url = "javascript:alert(1)", catalog = Nothing } ]
+                    , items = [ { title = "Unsafe URL", codes = [], codesText = "", kind = Set, services = [], description = "", url = "javascript:alert(1)", catalog = Nothing, photos = [] } ]
                     }
                     |> Decode.decodeValue (Decode.field "items" (Decode.index 0 (Decode.field "url" Decode.string)))
                     |> Expect.err
@@ -97,7 +98,7 @@ suite =
             \_ ->
                 let
                     item =
-                        { title = "Falcon", codes = [ "75192-1" ], codesText = "75192-1", kind = Set, services = [ Rebrickable, Lego ], description = "", url = "", catalog = Nothing }
+                        { title = "Falcon", codes = [ "75192-1" ], codesText = "75192-1", kind = Set, services = [ Rebrickable, Lego ], description = "", url = "", catalog = Nothing, photos = [] }
                 in
                 Api.listBody "owner-id"
                     { title = "Rebrickable list", description = "", markdown = "", items = [ item ], status = Draft }
@@ -136,25 +137,67 @@ suite =
         , test "Given an optional list photo, when a record is decoded, then its filename is retained" <|
             \_ ->
                 Decode.decodeString Api.decodeList "{\"id\":\"list-id\",\"title\":\"Catalog\",\"status\":\"published\",\"photo\":\"cover.webp\"}"
-                    |> Result.map .photo
+                    |> Result.map (.savedPhotos >> Dict.get "photo")
                     |> Expect.equal (Ok (Just "cover.webp"))
-        , test "Given no list photo, when a record is decoded, then photo is empty" <|
+        , test "Given no list photos, when a record is decoded, then no photo slots are saved" <|
             \_ ->
                 Expect.equal
-                    [ Ok Nothing, Ok Nothing ]
-                    [ Decode.decodeString Api.decodeList "{\"id\":\"list-id\",\"title\":\"Catalog\",\"status\":\"published\"}" |> Result.map .photo
-                    , Decode.decodeString Api.decodeList "{\"id\":\"list-id\",\"title\":\"Catalog\",\"status\":\"published\",\"photo\":\"\"}" |> Result.map .photo
+                    [ Ok Dict.empty, Ok Dict.empty ]
+                    [ Decode.decodeString Api.decodeList "{\"id\":\"list-id\",\"title\":\"Catalog\",\"status\":\"published\"}" |> Result.map .savedPhotos
+                    , Decode.decodeString Api.decodeList "{\"id\":\"list-id\",\"title\":\"Catalog\",\"status\":\"published\",\"photo\":\"\",\"photo_01\":null}" |> Result.map .savedPhotos
                     ]
+        , test "Given gallery photos, when a record is decoded, then only saved photo slots are retained" <|
+            \_ ->
+                Decode.decodeString Api.decodeList "{\"id\":\"list-id\",\"title\":\"Catalog\",\"status\":\"published\",\"photo_02\":\"second.webp\",\"photo_05\":\"\",\"photo_09\":\"other.webp\"}"
+                    |> Result.map .savedPhotos
+                    |> Expect.equal (Ok (Dict.fromList [ ( "photo_02", "second.webp" ) ]))
         , test "Given a list photo, when its URL is built, then the record and file names are path-encoded" <|
             \_ ->
                 Decode.decodeString Api.decodeList "{\"id\":\"list/id\",\"title\":\"Catalog\",\"status\":\"published\",\"photo\":\"cover photo.webp\"}"
-                    |> Result.map (Api.photoUrl "https://pb.example" Nothing >> Maybe.withDefault "Missing photo URL")
+                    |> Result.map (\record -> Api.photoUrl "https://pb.example" Nothing record "photo" |> Maybe.withDefault "Missing photo URL")
                     |> Expect.equal (Ok "https://pb.example/api/files/table_catalogs/list%2Fid/cover%20photo.webp")
         , test "Given an authenticated photo URL, when built, then the short-lived file token is encoded" <|
             \_ ->
                 Decode.decodeString Api.decodeList "{\"id\":\"list-id\",\"title\":\"Catalog\",\"status\":\"draft\",\"photo\":\"cover.webp\"}"
-                    |> Result.map (Api.photoUrl "https://pb.example" (Just "file.token/with+symbols") >> Maybe.withDefault "Missing photo URL")
+                    |> Result.map (\record -> Api.photoUrl "https://pb.example" (Just "file.token/with+symbols") record "photo" |> Maybe.withDefault "Missing photo URL")
                     |> Expect.equal (Ok "https://pb.example/api/files/table_catalogs/list-id/cover.webp?token=file.token%2Fwith%2Bsymbols")
+        , test "Given a gallery slot, when its URL is built, then only that slot's file is addressed" <|
+            \_ ->
+                Decode.decodeString Api.decodeList "{\"id\":\"list-id\",\"title\":\"Catalog\",\"status\":\"published\",\"photo_03\":\"third.webp\"}"
+                    |> Result.map
+                        (\record ->
+                            ( Api.photoUrl "https://pb.example" Nothing record "photo_03"
+                            , Api.photoUrl "https://pb.example" Nothing record "photo_01"
+                            )
+                        )
+                    |> Expect.equal (Ok ( Just "https://pb.example/api/files/table_catalogs/list-id/third.webp", Nothing ))
+        , test "Given item photo slots, when decoded, then unknown and duplicate slots are dropped in gallery order" <|
+            \_ ->
+                Decode.decodeString Api.decodeSetItem "{\"codes\":[\"75192-1\"],\"type\":\"set\",\"services\":[],\"photos\":[\"photo_03\",\"photo\",\"photo_01\",\"photo_03\",\"https://example.com/x.webp\"]}"
+                    |> Result.map .photos
+                    |> Expect.equal (Ok [ "photo_01", "photo_03" ])
+        , test "Given an item with gallery slots, when encoded and decoded, then the selection is retained and empty selections are omitted" <|
+            \_ ->
+                let
+                    base =
+                        Types.emptySetItem
+
+                    withPhotos =
+                        { base | title = "Falcon", codes = [ "75192-1" ], photos = [ "photo_04", "photo_01" ] }
+
+                    value =
+                        Api.listBody "owner-id" { title = "Catalog", description = "", markdown = "", items = [ withPhotos, { base | title = "Plain" } ], status = Draft }
+                in
+                Expect.all
+                    [ \_ ->
+                        Decode.decodeValue (Decode.field "items" (Decode.index 0 Api.decodeSetItem)) value
+                            |> Result.map .photos
+                            |> Expect.equal (Ok [ "photo_01", "photo_04" ])
+                    , \_ ->
+                        Decode.decodeValue (Decode.field "items" (Decode.index 1 (Decode.field "photos" (Decode.list Decode.string)))) value
+                            |> Expect.err
+                    ]
+                    ()
         , test "Given a list form, when it is encoded, then the separately uploaded photo is not overwritten" <|
             \_ ->
                 Api.listBody "owner-id" { title = "Catalog", description = "", markdown = "", items = [], status = Draft }
@@ -202,7 +245,7 @@ suite =
             \_ ->
                 let
                     item =
-                        Types.setItemCodesText "75192-1\n" { title = "Falcon", codes = [], codesText = "", kind = Set, services = [], description = "", url = "", catalog = Nothing }
+                        Types.setItemCodesText "75192-1\n" { title = "Falcon", codes = [], codesText = "", kind = Set, services = [], description = "", url = "", catalog = Nothing, photos = [] }
                 in
                 Expect.all
                     [ \_ -> item.codesText |> Expect.equal "75192-1\n"
@@ -214,13 +257,13 @@ suite =
                 Expect.equal
                     [ True, False, False, True, False, True, True ]
                     (List.map Types.itemHasValidCodes
-                        [ { title = "Set", codes = [ " 75192-1 " ], codesText = " 75192-1 ", kind = Set, services = [], description = "", url = "", catalog = Nothing }
-                        , { title = "Set", codes = [], codesText = " \n ", kind = Set, services = [], description = "", url = "", catalog = Nothing }
-                        , { title = "Set", codes = [ "   " ], codesText = "   ", kind = Set, services = [], description = "", url = "", catalog = Nothing }
-                        , { title = "Altbuild", codes = [ "10305-1" ], codesText = "10305-1", kind = AltBuild, services = [], description = "", url = "", catalog = Nothing }
-                        , { title = "Altbuild", codes = [], codesText = "", kind = AltBuild, services = [], description = "", url = "", catalog = Nothing }
-                        , { title = "MOC", codes = [], codesText = "", kind = Moc, services = [], description = "", url = "", catalog = Nothing }
-                        , { title = "MOC", codes = [ "MOC-123" ], codesText = "MOC-123", kind = Moc, services = [ Brickset ], description = "", url = "", catalog = Nothing }
+                        [ { title = "Set", codes = [ " 75192-1 " ], codesText = " 75192-1 ", kind = Set, services = [], description = "", url = "", catalog = Nothing, photos = [] }
+                        , { title = "Set", codes = [], codesText = " \n ", kind = Set, services = [], description = "", url = "", catalog = Nothing, photos = [] }
+                        , { title = "Set", codes = [ "   " ], codesText = "   ", kind = Set, services = [], description = "", url = "", catalog = Nothing, photos = [] }
+                        , { title = "Altbuild", codes = [ "10305-1" ], codesText = "10305-1", kind = AltBuild, services = [], description = "", url = "", catalog = Nothing, photos = [] }
+                        , { title = "Altbuild", codes = [], codesText = "", kind = AltBuild, services = [], description = "", url = "", catalog = Nothing, photos = [] }
+                        , { title = "MOC", codes = [], codesText = "", kind = Moc, services = [], description = "", url = "", catalog = Nothing, photos = [] }
+                        , { title = "MOC", codes = [ "MOC-123" ], codesText = "MOC-123", kind = Moc, services = [ Brickset ], description = "", url = "", catalog = Nothing, photos = [] }
                         ]
                     )
         , test "Given a MOC with codes, when encoded and decoded, then its codes and selected services are retained" <|
@@ -235,6 +278,7 @@ suite =
                         , description = ""
                         , url = ""
                         , catalog = Nothing
+                        , photos = []
                         }
                 in
                 Api.listBody "owner-id"
@@ -318,6 +362,7 @@ suite =
                                 , pieces = Just 7541
                                 , imageUrl = Just "https://cdn.rebrickable.com/media/sets/75192-1.jpg"
                                 }
+                        , photos = []
                         }
 
                     value =
@@ -355,6 +400,7 @@ suite =
                                     , pieces = Just 7541
                                     , imageUrl = Just "https://cdn.rebrickable.com/media/sets/75192-1.jpg"
                                     }
+                            , photos = []
                         }
                 in
                 Api.listBody "owner-id" { title = "Catalog", description = "", markdown = "", items = [ item ], status = Draft }
@@ -406,7 +452,7 @@ suite =
         , test "Given an item with invalid codes before a valid code, when selecting a lookup code, then the first valid one is used" <|
             \_ ->
                 Types.firstLookupCode
-                    { title = "Falcon", codes = [ "MOC-123", " 75192-1 ", "10305-1" ], codesText = "", kind = Set, services = [], description = "", url = "", catalog = Nothing }
+                    { title = "Falcon", codes = [ "MOC-123", " 75192-1 ", "10305-1" ], codesText = "", kind = Set, services = [], description = "", url = "", catalog = Nothing, photos = [] }
                     |> Expect.equal (Just "75192-1")
         , test "Given a saved lookup snapshot, when the first valid code changes, then the snapshot is cleared" <|
             \_ ->
@@ -428,6 +474,7 @@ suite =
                                 , pieces = Just 7541
                                 , imageUrl = Nothing
                                 }
+                        , photos = []
                         }
 
                     unchanged =
@@ -437,11 +484,23 @@ suite =
                         Types.setItemCodesText "MOC-1\n10305-1" item
                 in
                 Expect.equal [ Just "75192-1", Nothing ] [ Maybe.map .code unchanged.catalog, changed.catalog |> Maybe.map .code ]
+        , test "Given a gallery slot is cleared, when it is removed from items, then only that slot is unselected everywhere" <|
+            \_ ->
+                let
+                    base =
+                        Types.emptySetItem
+
+                    withPhotos photos =
+                        { base | title = "Falcon", photos = photos }
+                in
+                Types.clearPhotoSlotFromItems "photo_02" [ withPhotos [ "photo_01", "photo_02" ], withPhotos [ "photo_02" ], withPhotos [] ]
+                    |> List.map .photos
+                    |> Expect.equal [ [ "photo_01" ], [], [] ]
         , test "Given an outstanding lookup, when an item's first valid code changes, then its response is stale" <|
             \_ ->
                 let
                     editedItem =
-                        { title = "Falcon", codes = [ "10305-1" ], codesText = "10305-1", kind = Set, services = [], description = "", url = "", catalog = Nothing }
+                        { title = "Falcon", codes = [ "10305-1" ], codesText = "10305-1", kind = Set, services = [], description = "", url = "", catalog = Nothing, photos = [] }
                 in
                 Expect.equal [ True, False ]
                     [ Types.lookupCodeMatches "75192-1" { editedItem | codes = [ "MOC-123", "75192-1" ] }

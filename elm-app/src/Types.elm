@@ -1,9 +1,10 @@
-module Types exposing (CatalogProvider(..), ItemKind(..), ListForm, ListRecord, ListStatus(..), Service(..), SetCatalog, SetItem, acceptCatalog, emptyForm, emptySetItem, fillTitleFromLookup, firstLookupCode, itemHasTitle, itemHasValidCodes, itemKindFromString, itemKindToString, lookupCodeMatches, normalizeCodes, serviceFromString, serviceName, serviceToString, setItemCodesText, validSetCode)
+module Types exposing (CatalogProvider(..), ItemKind(..), ListForm, ListRecord, ListStatus(..), Service(..), SetCatalog, SetItem, acceptCatalog, clearPhotoSlotFromItems, coverPhotoSlot, emptyForm, emptySetItem, fillTitleFromLookup, firstLookupCode, galleryPhotoSlots, itemHasTitle, itemHasValidCodes, itemKindFromString, itemKindToString, lookupCodeMatches, normalizeCodes, normalizePhotoSlots, photoSlots, savedPhotoFilename, serviceFromString, serviceName, serviceToString, setItemCodesText, setSavedPhoto, validSetCode)
 
 {-| Domain types for persisted table catalogs and their ordered rows.
 -}
 
 import Char
+import Dict exposing (Dict)
 
 
 type Service
@@ -43,6 +44,7 @@ type alias SetItem =
     , description : String
     , url : String
     , catalog : Maybe SetCatalog
+    , photos : List String
     }
 
 
@@ -56,7 +58,41 @@ emptySetItem =
     , description = ""
     , url = ""
     , catalog = Nothing
+    , photos = []
     }
+
+
+{-| The list's cover photo slot, stored in the PocketBase `photo` file field.
+-}
+coverPhotoSlot : String
+coverPhotoSlot =
+    "photo"
+
+
+{-| Gallery photo slots, in display order. Items refer to these names rather than to filenames.
+-}
+galleryPhotoSlots : List String
+galleryPhotoSlots =
+    [ "photo_01", "photo_02", "photo_03", "photo_04", "photo_05" ]
+
+
+photoSlots : List String
+photoSlots =
+    coverPhotoSlot :: galleryPhotoSlots
+
+
+{-| Keeps only known gallery slots, without duplicates, in gallery order.
+-}
+normalizePhotoSlots : List String -> List String
+normalizePhotoSlots slots =
+    List.filter (\slot -> List.member slot slots) galleryPhotoSlots
+
+
+{-| Unselects a gallery slot from every item, so a later upload to that slot is not selected again.
+-}
+clearPhotoSlotFromItems : String -> List SetItem -> List SetItem
+clearPhotoSlotFromItems slot items =
+    List.map (\item -> { item | photos = List.filter ((/=) slot) item.photos }) items
 
 
 type ListStatus
@@ -73,8 +109,23 @@ type alias ListRecord =
     , status : ListStatus
     , owner : String
     , updated : String
-    , photo : Maybe String
+    , savedPhotos : Dict String String
     }
+
+
+savedPhotoFilename : String -> ListRecord -> Maybe String
+savedPhotoFilename slot record =
+    Dict.get slot record.savedPhotos
+
+
+setSavedPhoto : String -> Maybe String -> ListRecord -> ListRecord
+setSavedPhoto slot maybeFilename record =
+    case maybeFilename of
+        Just filename ->
+            { record | savedPhotos = Dict.insert slot filename record.savedPhotos }
+
+        Nothing ->
+            { record | savedPhotos = Dict.remove slot record.savedPhotos }
 
 
 type alias ListForm =

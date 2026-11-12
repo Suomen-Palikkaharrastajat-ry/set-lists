@@ -32,6 +32,9 @@ maximum edge, and 200 KB size limit, then uploads the result to the protected
 `fixtures/pb_migrations/1794377044_table_catalogs_photo.js` before deploying the
 frontend. Public published views are authorized by the collection view rule;
 owner views of drafts use PocketBase's short-lived protected-file token.
+The five gallery photos (`photo_01` to `photo_05`) use the same processing and
+protection; apply `fixtures/pb_migrations/1794463444_table_catalogs_gallery.js`
+with them. Set lookup and thumbnail caching do not change for gallery photos.
 
 Lookup codes must use the canonical `digits-variant` form, such as `75192-1`.
 The route returns bounded metadata and an optional HTTPS image URL. Its shared

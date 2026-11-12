@@ -74,6 +74,7 @@ type alias Model =
     , markdownPreviewIds : List String
     , saving : Bool
     , photoUploadState : PhotoUploadState
+    , photoSlot : String
     , photoCrop : Maybe PhotoCrop.State
     , photoFileToken : Maybe String
     , notice : Maybe String
@@ -105,6 +106,7 @@ type LoadState a
 type EditorTab
     = ItemsTab
     | DescriptionTab
+    | PhotosTab
 
 
 type PhotoUploadState
@@ -147,6 +149,7 @@ type alias SetThumbnailProcessed =
 
 type alias ListPhotoResult =
     { listId : String
+    , slot : String
     , photo : String
     , fileToken : String
     , error : String
@@ -155,6 +158,7 @@ type alias ListPhotoResult =
 
 type alias ListPhotoPreparedResult =
     { listId : String
+    , slot : String
     , previewUrl : String
     , width : Int
     , height : Int
@@ -164,6 +168,7 @@ type alias ListPhotoPreparedResult =
 
 type alias ListPhotoClearedResult =
     { listId : String
+    , slot : String
     , error : String
     }
 
@@ -212,7 +217,7 @@ type Msg
     | MarkdownChanged String
     | SetSearchChanged Int String
     | SetSearchKeyPressed Int String
-    | ListPhotoSelected String
+    | ListPhotoSelected String String
     | ListPhotoPrepared ListPhotoPreparedResult
     | PhotoCropRatioSelected PhotoCrop.CoverRatio
     | PhotoCropZoomChanged String
@@ -223,9 +228,10 @@ type Msg
     | PhotoCropCancelClicked
     | PhotoCropApplyClicked
     | ListPhotoProcessed ListPhotoResult
-    | ListPhotoClearClicked
+    | ListPhotoClearClicked String
     | ListPhotoCleared ListPhotoClearedResult
     | PhotoFileTokenReceived PhotoFileTokenResult
+    | ItemPhotoToggled Int String Bool
     | RemoveItemCode Int String
     | SetSearchReady SetSearchPayload
     | SetSearchCompleted Int Int String (Result Http.Error (List Api.SetSuggestion))
@@ -303,7 +309,7 @@ port processSetThumbnail : { index : Int, requestId : Int, code : String, imageU
 port setThumbnailProcessed : (SetThumbnailProcessed -> msg) -> Sub msg
 
 
-port prepareListPhoto : { inputId : String, listId : String } -> Cmd msg
+port prepareListPhoto : { inputId : String, listId : String, slot : String } -> Cmd msg
 
 
 port listPhotoPrepared : (ListPhotoPreparedResult -> msg) -> Sub msg
@@ -314,6 +320,7 @@ port cancelListPhotoPreparation : { listId : String } -> Cmd msg
 
 port applyListPhoto :
     { listId : String
+    , slot : String
     , pbBaseUrl : String
     , token : String
     , crop : PhotoCrop.CropRegion
@@ -324,7 +331,7 @@ port applyListPhoto :
 port listPhotoProcessed : (ListPhotoResult -> msg) -> Sub msg
 
 
-port clearListPhoto : { listId : String, pbBaseUrl : String, token : String } -> Cmd msg
+port clearListPhoto : { listId : String, slot : String, pbBaseUrl : String, token : String } -> Cmd msg
 
 
 port listPhotoCleared : (ListPhotoClearedResult -> msg) -> Sub msg
@@ -395,6 +402,7 @@ init flags url key =
       , markdownPreviewIds = []
       , saving = False
       , photoUploadState = PhotoReady
+      , photoSlot = Types.coverPhotoSlot
       , photoCrop = Nothing
       , photoFileToken = Nothing
       , notice = Nothing
@@ -478,8 +486,7 @@ subscriptions model =
                                     && not model.menuOpen
                                     && not (hasActiveSetSuggestions model)
                                     && not (String.startsWith "item-search-" targetId)
-                                    && targetId
-                                    /= "list-photo-input"
+                                    && not (String.startsWith "list-photo-input" targetId)
                                     && not (photoActionInProgress model.photoUploadState)
                             then
                                 EditorEscapePressed
@@ -692,11 +699,15 @@ update msg model =
                                 , draggingSetIndex = Nothing
                                 , dropGap = Nothing
                               }
-                            , case ( record.photo, getToken model.auth ) of
-                                ( Just _, Just token ) ->
-                                    requestListPhotoFileToken { listId = record.id, pbBaseUrl = model.pbBaseUrl, token = token }
+                            , case getToken model.auth of
+                                Just token ->
+                                    if Dict.isEmpty record.savedPhotos then
+                                        Cmd.none
 
-                                _ ->
+                                    else
+                                        requestListPhotoFileToken { listId = record.id, pbBaseUrl = model.pbBaseUrl, token = token }
+
+                                Nothing ->
                                     Cmd.none
                             )
 
@@ -706,17 +717,18 @@ update msg model =
             else
                 ( model, Cmd.none )
 
-        ListPhotoSelected listId ->
+        ListPhotoSelected slot listId ->
             case ( model.route, model.currentList, getToken model.auth ) of
-                ( Route.EditList (Just routeId), Loaded record, Just token ) ->
-                    if routeId /= listId || record.id /= listId || photoActionInProgress model.photoUploadState then
+                ( Route.EditList (Just routeId), Loaded record, Just _ ) ->
+                    if routeId /= listId || record.id /= listId || not (List.member slot Types.photoSlots) || photoActionInProgress model.photoUploadState then
                         ( model, Cmd.none )
 
                     else
-                        ( { model | photoUploadState = PhotoPreparing }
+                        ( { model | photoUploadState = PhotoPreparing, photoSlot = slot }
                         , prepareListPhoto
-                            { inputId = "list-photo-input"
+                            { inputId = photoInputId slot
                             , listId = listId
+                            , slot = slot
                             }
                         )
 
@@ -726,7 +738,7 @@ update msg model =
         ListPhotoPrepared result ->
             case ( model.route, model.currentList ) of
                 ( Route.EditList (Just routeId), Loaded record ) ->
-                    if routeId /= result.listId || record.id /= result.listId || model.photoUploadState /= PhotoPreparing then
+                    if routeId /= result.listId || record.id /= result.listId || result.slot /= model.photoSlot || model.photoUploadState /= PhotoPreparing then
                         ( model, Cmd.none )
 
                     else if result.error /= "" then
@@ -802,6 +814,7 @@ update msg model =
                                 ( { model | photoCrop = Nothing, photoUploadState = PhotoUploading }
                                 , applyListPhoto
                                     { listId = record.id
+                                    , slot = model.photoSlot
                                     , pbBaseUrl = model.pbBaseUrl
                                     , token = token
                                     , crop = PhotoCrop.cropRegion crop
@@ -817,7 +830,7 @@ update msg model =
         ListPhotoProcessed result ->
             case ( model.route, model.currentList ) of
                 ( Route.EditList (Just routeId), Loaded record ) ->
-                    if routeId /= result.listId || record.id /= result.listId then
+                    if routeId /= result.listId || record.id /= result.listId || result.slot /= model.photoSlot then
                         ( model, Cmd.none )
 
                     else if result.error /= "" then
@@ -825,7 +838,7 @@ update msg model =
 
                     else
                         ( { model
-                            | currentList = Loaded { record | photo = Maybe.andThen nonEmptyPhoto (Just result.photo) }
+                            | currentList = Loaded (Types.setSavedPhoto result.slot (nonEmptyPhoto result.photo) record)
                             , photoUploadState = PhotoUploaded
                             , photoFileToken =
                                 case nonEmptyPhoto result.fileToken of
@@ -841,15 +854,15 @@ update msg model =
                 _ ->
                     ( model, Cmd.none )
 
-        ListPhotoClearClicked ->
+        ListPhotoClearClicked slot ->
             case ( model.route, model.currentList, getToken model.auth ) of
                 ( Route.EditList (Just routeId), Loaded record, Just token ) ->
-                    if routeId /= record.id || record.photo == Nothing || photoActionInProgress model.photoUploadState then
+                    if routeId /= record.id || Types.savedPhotoFilename slot record == Nothing || photoActionInProgress model.photoUploadState then
                         ( model, Cmd.none )
 
                     else
-                        ( { model | photoUploadState = PhotoRemoving }
-                        , clearListPhoto { listId = record.id, pbBaseUrl = model.pbBaseUrl, token = token }
+                        ( { model | photoUploadState = PhotoRemoving, photoSlot = slot }
+                        , clearListPhoto { listId = record.id, slot = slot, pbBaseUrl = model.pbBaseUrl, token = token }
                         )
 
                 _ ->
@@ -858,18 +871,28 @@ update msg model =
         ListPhotoCleared result ->
             case ( model.route, model.currentList ) of
                 ( Route.EditList (Just routeId), Loaded record ) ->
-                    if routeId /= result.listId || record.id /= result.listId then
+                    if routeId /= result.listId || record.id /= result.listId || result.slot /= model.photoSlot then
                         ( model, Cmd.none )
 
                     else if result.error /= "" then
-                        ( { model | photoUploadState = PhotoUploadFailed "Kansikuvan poistaminen epäonnistui. Yritä uudelleen." }, Cmd.none )
+                        ( { model | photoUploadState = PhotoUploadFailed "Kuvan poistaminen epäonnistui. Yritä uudelleen." }, Cmd.none )
 
                     else
-                        ( { model
-                            | currentList = Loaded { record | photo = Nothing }
-                            , photoFileToken = Nothing
-                            , photoUploadState = PhotoRemoved
-                          }
+                        let
+                            updated =
+                                Types.setSavedPhoto result.slot Nothing record
+                        in
+                        ( mapForm (\form -> { form | items = Types.clearPhotoSlotFromItems result.slot form.items })
+                            { model
+                                | currentList = Loaded { updated | items = Types.clearPhotoSlotFromItems result.slot updated.items }
+                                , photoFileToken =
+                                    if Dict.isEmpty updated.savedPhotos then
+                                        Nothing
+
+                                    else
+                                        model.photoFileToken
+                                , photoUploadState = PhotoRemoved
+                            }
                         , Cmd.none
                         )
 
@@ -1264,6 +1287,22 @@ update msg model =
         ItemUrlChanged index url ->
             ( mapForm (\form -> { form | items = updateAt index (\item -> { item | url = url }) form.items }) model, Cmd.none )
 
+        ItemPhotoToggled index slot enabled ->
+            let
+                toggle item =
+                    { item
+                        | photos =
+                            Types.normalizePhotoSlots
+                                (if enabled then
+                                    slot :: item.photos
+
+                                 else
+                                    List.filter ((/=) slot) item.photos
+                                )
+                    }
+            in
+            ( mapForm (\form -> { form | items = updateAt index toggle form.items }) model, Cmd.none )
+
         ApplyMarkdownFormat id prefix suffix linePrefix ->
             ( model, applyMarkdownFormatting { id = id, prefix = prefix, suffix = suffix, linePrefix = linePrefix } )
 
@@ -1309,7 +1348,7 @@ update msg model =
             )
 
         SelectEditorTab tab ->
-            ( { model | editorTab = tab }, Cmd.none )
+            ( { model | editorTab = tab }, refreshPhotoFileToken model )
 
         EditorTabKeyPressed key ->
             let
@@ -1321,7 +1360,10 @@ update msg model =
 
             else
                 ( { model | editorTab = nextTab }
-                , Task.attempt (\_ -> NoOp) (Dom.focus (editorTabId nextTab))
+                , Cmd.batch
+                    [ Task.attempt (\_ -> NoOp) (Dom.focus (editorTabId nextTab))
+                    , refreshPhotoFileToken model
+                    ]
                 )
 
         ToggleService index service enabled ->
@@ -1614,26 +1656,52 @@ moveOpenSetIndex from to maybeOpenIndex =
         maybeOpenIndex
 
 
+editorTabOrder : List EditorTab
+editorTabOrder =
+    [ ItemsTab, DescriptionTab, PhotosTab ]
+
+
 editorTabForKey : EditorTab -> String -> EditorTab
 editorTabForKey activeTab key =
-    case ( activeTab, key ) of
-        ( ItemsTab, "ArrowLeft" ) ->
-            DescriptionTab
+    let
+        lastIndex =
+            List.length editorTabOrder - 1
 
-        ( ItemsTab, "ArrowRight" ) ->
-            DescriptionTab
+        activeIndex =
+            editorTabOrder
+                |> List.indexedMap Tuple.pair
+                |> List.filter (\( _, tab ) -> tab == activeTab)
+                |> List.head
+                |> Maybe.map Tuple.first
+                |> Maybe.withDefault 0
 
-        ( DescriptionTab, "ArrowLeft" ) ->
+        tabAt index =
+            List.drop index editorTabOrder |> List.head |> Maybe.withDefault activeTab
+    in
+    case key of
+        "ArrowLeft" ->
+            tabAt
+                (if activeIndex == 0 then
+                    lastIndex
+
+                 else
+                    activeIndex - 1
+                )
+
+        "ArrowRight" ->
+            tabAt
+                (if activeIndex == lastIndex then
+                    0
+
+                 else
+                    activeIndex + 1
+                )
+
+        "Home" ->
             ItemsTab
 
-        ( DescriptionTab, "ArrowRight" ) ->
-            ItemsTab
-
-        ( _, "Home" ) ->
-            ItemsTab
-
-        ( _, "End" ) ->
-            DescriptionTab
+        "End" ->
+            PhotosTab
 
         _ ->
             activeTab
@@ -1647,6 +1715,22 @@ editorTabId tab =
 
         DescriptionTab ->
             "editor-tab-description"
+
+        PhotosTab ->
+            "editor-tab-photos"
+
+
+editorPanelId : EditorTab -> String
+editorPanelId tab =
+    case tab of
+        ItemsTab ->
+            "editor-panel-items"
+
+        DescriptionTab ->
+            "editor-panel-description"
+
+        PhotosTab ->
+            "editor-panel-photos"
 
 
 mapForm : (ListForm -> ListForm) -> Model -> Model
@@ -2021,6 +2105,11 @@ viewListDetail model owned record =
                 |> List.filterMap .catalog
                 |> List.foldl (\catalog catalogs -> Dict.insert catalog.code catalog catalogs) Dict.empty
 
+        galleryUrls =
+            Types.galleryPhotoSlots
+                |> List.filterMap (\slot -> savedPhotoUrlForModel model record slot |> Maybe.map (\url -> ( slot, url )))
+                |> Dict.fromList
+
         containerClass =
             if authenticated then
                 "print-list mx-auto max-w-3xl rounded-lg border border-border-default bg-white p-5 shadow-sm sm:p-8"
@@ -2082,7 +2171,7 @@ viewListDetail model owned record =
                        )
                 )
             ]
-        , div [ class itemsClass ] (List.indexedMap (viewSet catalogsByCode) record.items)
+        , div [ class itemsClass ] (List.indexedMap (viewSet catalogsByCode galleryUrls) record.items)
         ]
 
 
@@ -2095,18 +2184,18 @@ nonEmptyPhoto filename =
         Just filename
 
 
-listPhotoUrlForModel : Model -> ListRecord -> Maybe String
-listPhotoUrlForModel model record =
+savedPhotoUrlForModel : Model -> ListRecord -> String -> Maybe String
+savedPhotoUrlForModel model record slot =
     if record.status == Draft && model.photoFileToken == Nothing then
         Nothing
 
     else
-        Api.photoUrl model.pbBaseUrl model.photoFileToken record
+        Api.photoUrl model.pbBaseUrl model.photoFileToken record slot
 
 
 viewListPhoto : Model -> ListRecord -> Html Msg
 viewListPhoto model record =
-    case listPhotoUrlForModel model record of
+    case savedPhotoUrlForModel model record Types.coverPhotoSlot of
         Just imageUrl ->
             img
                 [ src imageUrl
@@ -2121,13 +2210,13 @@ viewListPhoto model record =
             text ""
 
 
-viewSet : Dict String Types.SetCatalog -> Int -> SetItem -> Html Msg
-viewSet catalogsByCode index item =
+viewSet : Dict String Types.SetCatalog -> Dict String String -> Int -> SetItem -> Html Msg
+viewSet catalogsByCode galleryUrls index item =
     section [ class "print-break flex flex-wrap items-baseline gap-4 py-4" ]
         [ span [ class "type-mono text-text-muted" ] [ text (String.fromInt (index + 1) ++ ".") ]
         , div [ class "min-w-0 flex-1" ]
             [ div [ class "flow-root" ]
-                [ viewCatalogThumbnails "hidden sm:float-right sm:mb-3 sm:ml-4 sm:flex sm:max-w-[45%] sm:flex-wrap sm:justify-end sm:gap-2" catalogsByCode item.codes
+                [ viewItemThumbnails "hidden sm:float-right sm:mb-3 sm:ml-4 sm:flex sm:max-w-[45%] sm:flex-wrap sm:justify-end sm:gap-2" catalogsByCode galleryUrls item
                 , div [ class "mb-2" ]
                     [ h2 [ class "inline type-h3 break-words [overflow-wrap:anywhere]" ]
                         [ text
@@ -2154,7 +2243,7 @@ viewSet catalogsByCode index item =
                         Nothing ->
                             text ""
                     ]
-                , viewCatalogThumbnails "float-left mr-4 mb-3 flex w-32 max-w-[45%] flex-col gap-2 sm:hidden" catalogsByCode item.codes
+                , viewItemThumbnails "float-left mr-4 mb-3 grid w-36 max-w-[45%] grid-cols-2 gap-2 sm:hidden" catalogsByCode galleryUrls item
                 , viewItemMarkdown item.description
                 ]
             , if List.isEmpty item.codes then
@@ -2167,6 +2256,75 @@ viewSet catalogsByCode index item =
               else
                 div [ class "mt-3 space-y-3" ] (List.map (viewCodeLinks item.services catalogsByCode) item.codes)
             ]
+        ]
+
+
+viewItemPhotoChoices : Model -> Int -> SetItem -> Html Msg
+viewItemPhotoChoices model index item =
+    fieldset [ class "mt-4 space-y-2" ]
+        [ Html.legend [ class "type-caption text-text-muted" ] [ text "Näytä galleriakuvat" ]
+        , if savedListRecord model == Nothing then
+            p [ class "type-caption text-text-muted" ] [ text "Tallenna lista ja lisää galleriakuvat, jotta ne voi valita tähän kohteeseen." ]
+
+          else
+            text ""
+        , div [ class "flex flex-wrap gap-x-5 gap-y-2" ]
+            (List.indexedMap (viewItemPhotoChoice model index item) Types.galleryPhotoSlots)
+        ]
+
+
+viewItemPhotoChoice : Model -> Int -> SetItem -> Int -> String -> Html Msg
+viewItemPhotoChoice model index item position slot =
+    let
+        selected =
+            List.member slot item.photos
+
+        maybeRecord =
+            savedListRecord model
+
+        isSaved =
+            maybeRecord
+                |> Maybe.map (\record -> Dict.member slot record.savedPhotos)
+                |> Maybe.withDefault False
+
+        maybeImageUrl =
+            maybeRecord |> Maybe.andThen (\record -> savedPhotoUrlForModel model record slot)
+
+        inputId =
+            "item-photo-" ++ String.fromInt index ++ "-" ++ slot
+
+        labelText =
+            "Galleriakuva " ++ String.fromInt (position + 1)
+    in
+    label [ for inputId, class "inline-flex min-h-11 items-center gap-2 type-body-small" ]
+        [ input
+            [ id inputId
+            , type_ "checkbox"
+            , checked selected
+            , disabled (not isSaved && not selected)
+            , onCheck (ItemPhotoToggled index slot)
+            ]
+            []
+        , case maybeImageUrl of
+            Just imageUrl ->
+                img
+                    [ src imageUrl
+                    , alt ""
+                    , attribute "loading" "lazy"
+                    , attribute "referrerpolicy" "no-referrer"
+                    , class "h-10 w-10 rounded object-contain"
+                    ]
+                    []
+
+            Nothing ->
+                text ""
+        , text
+            (if isSaved then
+                labelText
+
+             else
+                labelText ++ " (tyhjä)"
+            )
         ]
 
 
@@ -2189,36 +2347,46 @@ viewCatalogSnapshot maybeCatalog =
             text ""
 
 
-viewCatalogThumbnails : String -> Dict String Types.SetCatalog -> List String -> Html Msg
-viewCatalogThumbnails layoutClass catalogsByCode codes =
+viewItemThumbnails : String -> Dict String Types.SetCatalog -> Dict String String -> SetItem -> Html Msg
+viewItemThumbnails layoutClass catalogsByCode galleryUrls item =
     let
-        catalogs =
-            codes
+        setImages =
+            item.codes
                 |> List.filterMap (\code -> Dict.get code catalogsByCode)
-                |> List.filter (\catalog -> catalog.imageUrl /= Nothing)
+                |> List.filterMap (\catalog -> Maybe.map (\imageUrl -> ( imageUrl, "Setin kuva: " ++ catalog.name )) catalog.imageUrl)
+
+        itemLabel =
+            if String.trim item.title == "" then
+                "Kohteen kuva"
+
+            else
+                "Kohteen kuva: " ++ item.title
+
+        galleryImages =
+            item.photos
+                |> List.filterMap (\slot -> Dict.get slot galleryUrls)
+                |> List.map (\imageUrl -> ( imageUrl, itemLabel ))
+
+        images =
+            setImages ++ galleryImages
     in
-    if List.isEmpty catalogs then
+    if List.isEmpty images then
         text ""
 
     else
-        div [ class layoutClass ] (List.map viewCatalogThumbnail catalogs)
+        div [ class layoutClass ] (List.map (\( imageUrl, altText ) -> viewThumbnailImage imageUrl altText) images)
 
 
-viewCatalogThumbnail : Types.SetCatalog -> Html Msg
-viewCatalogThumbnail catalog =
-    case catalog.imageUrl of
-        Just imageUrl ->
-            img
-                [ src imageUrl
-                , alt ("Setin kuva: " ++ catalog.name)
-                , attribute "loading" "lazy"
-                , attribute "referrerpolicy" "no-referrer"
-                , class "h-32 w-32 max-w-full rounded object-contain"
-                ]
-                []
-
-        Nothing ->
-            text ""
+viewThumbnailImage : String -> String -> Html Msg
+viewThumbnailImage imageUrl altText =
+    img
+        [ src imageUrl
+        , alt altText
+        , attribute "loading" "lazy"
+        , attribute "referrerpolicy" "no-referrer"
+        , class "h-16 w-16 max-w-full rounded object-contain sm:h-32 sm:w-32"
+        ]
+        []
 
 
 catalogSummary : Types.SetCatalog -> String
@@ -2445,20 +2613,8 @@ viewEditForm model maybeId =
             , div
                 [ attribute "role" "tabpanel"
                 , attribute "tabindex" "0"
-                , id
-                    (if model.editorTab == ItemsTab then
-                        "editor-panel-items"
-
-                     else
-                        "editor-panel-description"
-                    )
-                , attribute "aria-labelledby"
-                    (if model.editorTab == ItemsTab then
-                        "editor-tab-items"
-
-                     else
-                        "editor-tab-description"
-                    )
+                , id (editorPanelId model.editorTab)
+                , attribute "aria-labelledby" (editorTabId model.editorTab)
                 ]
                 [ case model.editorTab of
                     ItemsTab ->
@@ -2473,8 +2629,17 @@ viewEditForm model maybeId =
                                 , placeholder = Just "Esim. Keskiaikaiset linnat"
                                 }
                             , markdownEditor (List.member "list-markdown" model.markdownPreviewIds) "list-markdown" "Kuvaus" model.form.markdown MarkdownChanged
-                            , viewListPhotoEditor model maybeId
+                            , viewPhotoSlotEditor model maybeId Types.coverPhotoSlot "Listan kansikuva"
+                            , photoHelp maybeId
                             ]
+
+                    PhotosTab ->
+                        div [ class "space-y-6" ]
+                            (photoHelp maybeId
+                                :: List.indexedMap
+                                    (\index slot -> viewPhotoSlotEditor model maybeId slot ("Galleriakuva " ++ String.fromInt (index + 1)))
+                                    Types.galleryPhotoSlots
+                            )
                 ]
             , Form.radioGroup
                 { legend = "Julkaisutila"
@@ -2503,37 +2668,86 @@ viewEditForm model maybeId =
         ]
 
 
-viewListPhotoEditor : Model -> Maybe String -> Html Msg
-viewListPhotoEditor model maybeId =
+{-| Short-lived file tokens expire while an editor stays open, so switching tabs asks for a fresh one.
+-}
+refreshPhotoFileToken : Model -> Cmd Msg
+refreshPhotoFileToken model =
+    case ( model.route, model.currentList, getToken model.auth ) of
+        ( Route.EditList (Just routeId), Loaded record, Just token ) ->
+            if routeId == record.id && not (Dict.isEmpty record.savedPhotos) then
+                requestListPhotoFileToken { listId = record.id, pbBaseUrl = model.pbBaseUrl, token = token }
+
+            else
+                Cmd.none
+
+        _ ->
+            Cmd.none
+
+
+savedListRecord : Model -> Maybe ListRecord
+savedListRecord model =
+    case ( model.route, model.currentList ) of
+        ( Route.EditList (Just routeId), Loaded record ) ->
+            if routeId == record.id then
+                Just record
+
+            else
+                Nothing
+
+        _ ->
+            Nothing
+
+
+photoInputId : String -> String
+photoInputId slot =
+    "list-photo-input-" ++ slot
+
+
+photoHelp : Maybe String -> Html Msg
+photoHelp maybeId =
+    p [ id "list-photo-help", class "type-caption text-text-muted" ]
+        [ text
+            (if maybeId == Nothing then
+                "Tallenna lista ensin, avaa se muokattavaksi ja lisää sitten kuva."
+
+             else
+                "Ota kuva tai valitse kuvatiedosto, rajaa se kuvasuhteen ja zoomauksen avulla. Rajattu kuva pienennetään enintään 256 pikseliin ja tallennetaan WebP-kuvana (enintään 200 kt). Enimmäiskoko ennen käsittelyä on 20 Mt."
+            )
+        ]
+
+
+photoStatus : Bool -> String -> Html Msg
+photoStatus isAlert message =
+    if isAlert then
+        p [ id "list-photo-status", attribute "role" "alert", class "type-caption text-brand-red" ] [ text message ]
+
+    else
+        p [ id "list-photo-status", attribute "role" "status", attribute "aria-live" "polite", class "type-caption text-text-muted" ] [ text message ]
+
+
+viewPhotoSlotEditor : Model -> Maybe String -> String -> String -> Html Msg
+viewPhotoSlotEditor model maybeId slot labelText =
     let
         maybeRecord =
-            case ( maybeId, model.currentList ) of
-                ( Just id, Loaded record ) ->
-                    if id == record.id then
-                        Just record
-
-                    else
-                        Nothing
-
-                _ ->
-                    Nothing
+            savedListRecord model
 
         maybePhotoUrl =
-            maybeRecord |> Maybe.andThen (listPhotoUrlForModel model)
+            maybeRecord |> Maybe.andThen (\record -> savedPhotoUrlForModel model record slot)
 
         hasPhoto =
             maybeRecord
-                |> Maybe.andThen .photo
-                |> Maybe.andThen nonEmptyPhoto
-                |> Maybe.map (always True)
+                |> Maybe.map (\record -> Dict.member slot record.savedPhotos)
                 |> Maybe.withDefault False
+
+        isActive =
+            model.photoSlot == slot
 
         photoInputAttributes =
             case maybeId of
                 Just listId ->
                     [ on "change"
                         (Decode.at [ "target", "files" ] (Decode.index 0 File.decoder)
-                            |> Decode.map (\_ -> ListPhotoSelected listId)
+                            |> Decode.map (\_ -> ListPhotoSelected slot listId)
                         )
                     ]
 
@@ -2541,36 +2755,39 @@ viewListPhotoEditor model maybeId =
                     []
 
         statusView =
-            case model.photoUploadState of
-                PhotoReady ->
-                    text ""
+            if not isActive then
+                text ""
 
-                PhotoPreparing ->
-                    p [ id "list-photo-status", attribute "role" "status", attribute "aria-live" "polite", class "type-caption text-text-muted" ] [ text "Kansikuvaa valmistellaan…" ]
+            else
+                case model.photoUploadState of
+                    PhotoReady ->
+                        text ""
 
-                PhotoCropping ->
-                    p [ id "list-photo-status", attribute "role" "status", attribute "aria-live" "polite", class "type-caption text-text-muted" ] [ text "Rajaa kansikuva alla olevilla valinnoilla ja tallenna se." ]
+                    PhotoPreparing ->
+                        photoStatus False "Kuvaa valmistellaan…"
 
-                PhotoUploading ->
-                    p [ id "list-photo-status", attribute "role" "status", attribute "aria-live" "polite", class "type-caption text-text-muted" ] [ text "Kansikuvaa käsitellään ja tallennetaan…" ]
+                    PhotoCropping ->
+                        photoStatus False "Rajaa kuva alla olevilla valinnoilla ja tallenna se."
 
-                PhotoRemoving ->
-                    p [ id "list-photo-status", attribute "role" "status", attribute "aria-live" "polite", class "type-caption text-text-muted" ] [ text "Kansikuvaa poistetaan…" ]
+                    PhotoUploading ->
+                        photoStatus False "Kuvaa käsitellään ja tallennetaan…"
 
-                PhotoUploaded ->
-                    p [ id "list-photo-status", attribute "role" "status", attribute "aria-live" "polite", class "type-caption text-text-muted" ] [ text "Kansikuva tallennettiin." ]
+                    PhotoRemoving ->
+                        photoStatus False "Kuvaa poistetaan…"
 
-                PhotoRemoved ->
-                    p [ id "list-photo-status", attribute "role" "status", attribute "aria-live" "polite", class "type-caption text-text-muted" ] [ text "Kansikuva poistettiin." ]
+                    PhotoUploaded ->
+                        photoStatus False "Kuva tallennettiin."
 
-                PhotoUploadFailed message ->
-                    p [ id "list-photo-status", attribute "role" "alert", class "type-caption text-brand-red" ] [ text message ]
+                    PhotoRemoved ->
+                        photoStatus False "Kuva poistettiin."
+
+                    PhotoUploadFailed message ->
+                        photoStatus True message
     in
-    section [ class "space-y-3 rounded-lg border border-border-default bg-white p-4" ]
-        [ h2 [ class "type-h4" ] [ text "Listan kansikuva" ]
-        , label [ class "block type-body-small", attribute "for" "list-photo-input" ] [ text "Ota kuva tai valitse kuvatiedosto" ]
+    div [ class "space-y-3" ]
+        [ label [ class "block type-body-small mb-1 text-text-primary", attribute "for" (photoInputId slot) ] [ text labelText ]
         , input
-            ([ id "list-photo-input"
+            ([ id (photoInputId slot)
              , type_ "file"
              , attribute "accept" "image/*"
              , attribute "aria-describedby" "list-photo-help"
@@ -2580,19 +2797,14 @@ viewListPhotoEditor model maybeId =
                 ++ photoInputAttributes
             )
             []
-        , p [ id "list-photo-help", class "type-caption text-text-muted" ]
-            [ text
-                (if maybeId == Nothing then
-                    "Tallenna lista ensin, avaa se muokattavaksi ja lisää sitten kansikuva."
-
-                 else
-                    "Valitse kuva, rajaa se kuvasuhteen ja zoomauksen avulla. Rajattu kuva pienennetään enintään 256 pikseliin ja tallennetaan WebP-kuvana (enintään 200 kt). Enimmäiskoko ennen käsittelyä on 20 Mt."
-                )
-            ]
         , statusView
         , case ( model.photoUploadState, model.photoCrop ) of
             ( PhotoCropping, Just crop ) ->
-                photoCropPanel crop
+                if isActive then
+                    photoCropPanel labelText crop
+
+                else
+                    text ""
 
             _ ->
                 text ""
@@ -2602,7 +2814,7 @@ viewListPhotoEditor model maybeId =
                     Just imageUrl ->
                         img
                             [ src imageUrl
-                            , alt "Listan nykyinen kansikuva"
+                            , alt ("Nykyinen kuva: " ++ labelText)
                             , attribute "loading" "eager"
                             , attribute "referrerpolicy" "no-referrer"
                             , class "h-32 w-32 rounded object-contain"
@@ -2613,11 +2825,12 @@ viewListPhotoEditor model maybeId =
                         text ""
                 , button
                     [ type_ "button"
-                    , onClick ListPhotoClearClicked
+                    , onClick (ListPhotoClearClicked slot)
                     , disabled (photoActionInProgress model.photoUploadState)
+                    , attribute "aria-label" ("Poista kuva: " ++ labelText)
                     , class "inline-flex min-h-11 items-center justify-center rounded border border-red-300 px-4 py-2 type-body-small font-semibold text-red-700 hover:bg-red-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-red-500 disabled:cursor-not-allowed disabled:opacity-50"
                     ]
-                    [ text "Poista kansikuva" ]
+                    [ text "Poista kuva" ]
                 ]
 
           else
@@ -2625,8 +2838,8 @@ viewListPhotoEditor model maybeId =
         ]
 
 
-photoCropPanel : PhotoCrop.State -> Html Msg
-photoCropPanel crop =
+photoCropPanel : String -> PhotoCrop.State -> Html Msg
+photoCropPanel labelText crop =
     let
         region =
             PhotoCrop.cropRegion crop
@@ -2663,20 +2876,20 @@ photoCropPanel crop =
                 ]
     in
     section [ id "list-photo-crop", class "space-y-4 rounded-lg border border-border-default bg-white p-4", attribute "aria-labelledby" "list-photo-crop-title" ]
-        [ h3 [ id "list-photo-crop-title", class "type-h4" ] [ text "Rajaa kansikuva" ]
+        [ h3 [ id "list-photo-crop-title", class "type-h4" ] [ text ("Rajaa kuva: " ++ labelText) ]
         , div
             [ class "relative mx-auto w-full max-w-sm touch-none select-none overflow-hidden rounded bg-bg-subtle cursor-grab active:cursor-grabbing focus-visible:outline focus-visible:outline-2 focus-visible:outline-brand"
             , style "aspect-ratio" (String.fromInt crop.sourceWidth ++ " / " ++ String.fromInt crop.sourceHeight)
             , attribute "data-crop-frame" ""
             , attribute "role" "group"
             , attribute "tabindex" "0"
-            , attribute "aria-label" "Kansikuvan rajausalue"
+            , attribute "aria-label" ("Rajausalue: " ++ labelText)
             , attribute "aria-describedby" "list-photo-crop-hint"
             , preventDefaultOn "keydown" cropFrameKeyDecoder
             ]
             [ img
                 [ src crop.previewUrl
-                , alt "Kansikuvan esikatselu rajausalueineen"
+                , alt ("Esikatselu rajausalueineen: " ++ labelText)
                 , attribute "draggable" "false"
                 , class "block h-full w-full select-none"
                 ]
@@ -2736,7 +2949,7 @@ photoCropPanel crop =
                 , class "inline-flex min-h-11 items-center justify-center rounded border border-brand bg-white px-4 py-2 type-body-small font-semibold text-brand hover:bg-bg-subtle focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand"
                 ]
                 [ text "Peruuta" ]
-            , sharedButton "Tallenna kansikuva" PhotoCropApplyClicked Button.Primary False False
+            , sharedButton "Tallenna kuva" PhotoCropApplyClicked Button.Primary False False
             ]
         ]
 
@@ -2859,8 +3072,8 @@ photoUploadErrorMessage code =
 editorTabs : EditorTab -> Html Msg
 editorTabs activeTab =
     let
-        tabButton : EditorTab -> String -> String -> Html Msg
-        tabButton tab labelText panelId =
+        tabButton : EditorTab -> String -> Html Msg
+        tabButton tab labelText =
             let
                 isSelected =
                     activeTab == tab
@@ -2903,15 +3116,9 @@ editorTabs activeTab =
                      else
                         "false"
                     )
-                , attribute "aria-controls" panelId
+                , attribute "aria-controls" (editorPanelId tab)
                 , attribute "title" labelText
-                , id
-                    (if tab == ItemsTab then
-                        "editor-tab-items"
-
-                     else
-                        "editor-tab-description"
-                    )
+                , id (editorTabId tab)
                 ]
                 [ text labelText ]
     in
@@ -2922,8 +3129,9 @@ editorTabs activeTab =
             , attribute "aria-label" "Listan muokkausosiot"
             , attribute "aria-orientation" "horizontal"
             ]
-            [ tabButton ItemsTab "Teokset" "editor-panel-items"
-            , tabButton DescriptionTab "Kuvaus" "editor-panel-description"
+            [ tabButton ItemsTab "Teokset"
+            , tabButton DescriptionTab "Kuvaus"
+            , tabButton PhotosTab "Kuvat"
             ]
         , if activeTab == ItemsTab then
             div [ class "ml-auto" ]
@@ -3283,6 +3491,7 @@ viewEditSet model previewIds items index item =
                 , Form.textInput (Form.defaultField ("url-" ++ String.fromInt index) "Lisätietojen URL")
                     { value = item.url, onInput = ItemUrlChanged index, inputType = Form.Url, placeholder = Just "https://example.com" }
                 , viewCatalogSnapshot item.catalog
+                , viewItemPhotoChoices model index item
                 , fieldset [ class "mt-4" ]
                     [ Html.legend [ class "type-caption text-text-muted" ] [ text "Näytä linkit palveluissa" ]
                     , div [ class "mt-2 flex flex-wrap gap-x-5 gap-y-2" ]

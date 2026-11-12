@@ -31,8 +31,9 @@ pb-hook-test: ## Syntax-check and run no-network PocketBase hook tests
 	node --test fixtures/pb_hooks/set_lookup.test.mjs
 
 .PHONY: pb-migration-check
-pb-migration-check: ## Syntax-check the list photo migration
-	node --check fixtures/pb_migrations/1794377044_table_catalogs_photo.js
+pb-migration-check: ## Syntax-check PocketBase migrations and test the list photo field migrations
+	for file in fixtures/pb_migrations/*.js; do node --check "$$file" || exit 1; done
+	node --test fixtures/pb_migrations/table_catalogs_gallery.test.mjs
 
 .PHONY: photo-pipeline-test
 photo-pipeline-test: ## Test thumbnail sizing and metadata stripping
