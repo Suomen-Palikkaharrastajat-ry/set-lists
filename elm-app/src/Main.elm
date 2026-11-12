@@ -2208,7 +2208,7 @@ viewListPhoto model record =
                 , alt ("Kansikuva: " ++ record.title)
                 , attribute "loading" "eager"
                 , attribute "referrerpolicy" "no-referrer"
-                , class "float-left mr-4 mb-3 h-32 w-32 rounded object-contain"
+                , class "float-left mr-4 mb-3 h-32 w-32 rounded object-contain object-top pt-2"
                 ]
                 []
 
@@ -2249,7 +2249,7 @@ viewSet catalogsByCode galleryUrls index item =
                         Nothing ->
                             text ""
                     ]
-                , viewItemThumbnails "float-left mr-4 mb-3 grid w-36 max-w-[45%] grid-cols-2 gap-2 sm:hidden" catalogsByCode galleryUrls item
+                , viewItemThumbnails "float-left mr-4 mb-3 flex w-32 max-w-[45%] flex-col gap-2 sm:hidden" catalogsByCode galleryUrls item
                 , viewItemMarkdown item.description
                 ]
             , if List.isEmpty item.codes then
@@ -2390,7 +2390,7 @@ viewThumbnailImage imageUrl altText =
         , alt altText
         , attribute "loading" "lazy"
         , attribute "referrerpolicy" "no-referrer"
-        , class "h-16 w-16 max-w-full rounded object-contain sm:h-32 sm:w-32"
+        , class "h-32 w-32 max-w-full rounded object-contain object-top pt-2"
         ]
         []
 
@@ -2479,7 +2479,7 @@ viewMarkdown markdown =
         text ""
 
     else
-        section [ class "markdown-content mt-8 max-w-none type-body" ] (markdownNodes markdown)
+        section [ class "markdown-content mt-4 max-w-none type-body" ] (markdownNodes markdown)
 
 
 viewItemMarkdown : String -> Html Msg
@@ -2826,7 +2826,7 @@ viewPhotoSlotEditor model maybeId slot labelText =
                             , alt ("Nykyinen kuva: " ++ labelText)
                             , attribute "loading" "eager"
                             , attribute "referrerpolicy" "no-referrer"
-                            , class "h-32 w-32 rounded object-contain"
+                            , class "h-32 w-32 rounded object-contain object-top pt-2"
                             ]
                             []
 
