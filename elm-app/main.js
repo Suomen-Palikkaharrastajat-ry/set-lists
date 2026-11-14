@@ -40,7 +40,7 @@ const MAX_SET_IMAGE_BYTES = 1_000_000
 const MAX_LIST_PHOTO_BYTES = 20_000_000
 const MAX_THUMBNAIL_BYTES = 200_000
 const CROP_PREVIEW_MAX_DIMENSION = 1024
-const LIST_PHOTO_SLOTS = ['photo', 'photo_01', 'photo_02', 'photo_03', 'photo_04', 'photo_05']
+const LIST_PHOTO_SLOTS = ['photo', 'photo_01', 'photo_02', 'photo_03', 'photo_04', 'photo_05', 'photo_06', 'photo_07', 'photo_08', 'photo_09', 'photo_10']
 const setSearchTimers = new Map()
 let pendingListPhoto = null
 app.ports.scheduleSetSearch.subscribe((payload) => {
@@ -130,6 +130,21 @@ async function encodeWebpThumbnail(sourceBlob, maxSourceBytes) {
   }
 }
 
+let pocketbasePromise = null
+function loadPocketBase() {
+  if (!pocketbasePromise) {
+    pocketbasePromise = import('pocketbase').then((module) => module.default)
+  }
+  return pocketbasePromise
+}
+
+async function authenticatedPocketBase(baseUrl, token) {
+  const PocketBase = await loadPocketBase()
+  const pb = new PocketBase(baseUrl)
+  if (token) pb.authStore.save(token, null)
+  return pb
+}
+
 async function findStoredThumbnail(collection, code) {
   try {
     return await collection.getFirstListItem(`code="${code}"`)
@@ -144,32 +159,30 @@ app.ports.processSetThumbnail.subscribe(async (payload) => {
   try {
     if (!/^\d{1,6}-\d{1,3}$/.test(payload.code)) throw new Error('Invalid set code')
 
-    const PocketBase = (await import('pocketbase')).default
-    const pb = new PocketBase(payload.pbBaseUrl)
-    pb.authStore.save(payload.token, null)
+    const pb = await authenticatedPocketBase(payload.pbBaseUrl, payload.token)
     const collection = pb.collection('table_thumbnails')
     let record = await findStoredThumbnail(collection, payload.code)
 
-      if (record?.thumbnail) {
-        imageUrl = pb.files.getURL(record, record.thumbnail)
-      } else {
+    if (record?.thumbnail) {
+      imageUrl = pb.files.getURL(record, record.thumbnail)
+    } else {
       const sourceEndpoint = new URL('/api/set-lists/thumbnail-source', payload.pbBaseUrl)
       sourceEndpoint.searchParams.set('url', payload.imageUrl)
       const sourceResponse = await fetch(sourceEndpoint, {
         headers: { Authorization: payload.token },
-        })
-        if (!sourceResponse.ok) throw new Error('Thumbnail source unavailable')
-        const sourceBlob = await sourceResponse.blob()
-        const webp = await encodeWebpThumbnail(sourceBlob, MAX_SET_IMAGE_BYTES)
-        const file = new File([webp], `set-${payload.code}.webp`, { type: 'image/webp' })
-        try {
-          record = await collection.create({ code: payload.code, thumbnail: file })
-        } catch (error) {
-          // If another editor stored the same set concurrently, reuse that file.
-          record = await findStoredThumbnail(collection, payload.code)
-          if (!record) throw error
-        }
-        if (record?.thumbnail) imageUrl = pb.files.getURL(record, record.thumbnail)
+      })
+      if (!sourceResponse.ok) throw new Error('Thumbnail source unavailable')
+      const sourceBlob = await sourceResponse.blob()
+      const webp = await encodeWebpThumbnail(sourceBlob, MAX_SET_IMAGE_BYTES)
+      const file = new File([webp], `set-${payload.code}.webp`, { type: 'image/webp' })
+      try {
+        record = await collection.create({ code: payload.code, thumbnail: file })
+      } catch (error) {
+        // If another editor stored the same set concurrently, reuse that file.
+        record = await findStoredThumbnail(collection, payload.code)
+        if (!record) throw error
+      }
+      if (record?.thumbnail) imageUrl = pb.files.getURL(record, record.thumbnail)
     }
   } catch (_) {
     // Keep the set metadata even if thumbnail conversion or storage is unavailable.
@@ -182,13 +195,6 @@ app.ports.processSetThumbnail.subscribe(async (payload) => {
     imageUrl,
   })
 })
-
-async function authenticatedPocketBase(pbBaseUrl, token) {
-  const PocketBase = (await import('pocketbase')).default
-  const pb = new PocketBase(pbBaseUrl)
-  pb.authStore.save(token, null)
-  return pb
-}
 
 app.ports.prepareListPhoto.subscribe(async (payload) => {
   const input = document.getElementById(payload.inputId)
@@ -326,10 +332,10 @@ app.ports.applyMarkdownFormatting.subscribe(({ id, prefix, suffix, linePrefix })
   textarea.dispatchEvent(new Event('input', { bubbles: true }))
   textarea.focus()
 })
-wirePocketBaseAuthPorts(app, { loadPocketBase: () => import('pocketbase').then((module) => module.default) })
+wirePocketBaseAuthPorts(app, { loadPocketBase })
 app.ports.localPasswordLogin.subscribe(async ({ email, password }) => {
   try {
-    const PocketBase = (await import('pocketbase')).default
+    const PocketBase = await loadPocketBase()
     const pb = new PocketBase(pbBaseUrl)
     const authData = await pb.collection('users').authWithPassword(email, password)
     const record = authData.record
@@ -346,9 +352,7 @@ app.ports.localPasswordLogin.subscribe(async ({ email, password }) => {
     })
   }
 })
-triggerBackgroundAuthRefresh(pbBaseUrl, initAuth, {
-  loadPocketBase: () => import('pocketbase').then((module) => module.default),
-})
+triggerBackgroundAuthRefresh(pbBaseUrl, initAuth, { loadPocketBase })
 
 // Keep keyboard focus inside the mobile navigation's modal drawer.
 document.addEventListener('keydown', (event) => {

@@ -23,20 +23,21 @@
 ```
 
 The record also has an optional `photo` PocketBase file-field filename for the
-cover, and five optional gallery file fields, `photo_01` through `photo_05`. These
+cover, and ten optional gallery file fields, `photo_01` through `photo_10`. These
 are not part of the JSON list form and are uploaded separately after the list
 record has been created. The cover is edited on the Description tab; the gallery
 is edited on the Photos tab. The editor accepts a camera photo or image file,
 decodes and re-encodes it as WebP, strips EXIF/XMP/ICC metadata, scales its
 longest edge to 256 pixels without upscaling, and caps the result at 200 KB. The
-source file may be up to 20 MB. All six fields are protected: their file access is
+source file may be up to 20 MB. All eleven fields are protected: their file access is
 checked against the `table_catalogs` view rule, so published photos work
 anonymously while private draft photos require an owner file token. The cover
 field is added by `fixtures/pb_migrations/1794377044_table_catalogs_photo.js`; the
-gallery fields by `fixtures/pb_migrations/1794463444_table_catalogs_gallery.js`.
+gallery fields by `fixtures/pb_migrations/1794463444_table_catalogs_gallery.js`
+and `fixtures/pb_migrations/1794637169_table_catalogs_gallery_10.js`.
 
 An item's optional `photos` array lists gallery slot names (`photo_01` to
-`photo_05`), never filenames or URLs. Decoding keeps only known slots, without
+`photo_10`), never filenames or URLs. Decoding keeps only known slots, without
 duplicates, in gallery order; the array is omitted when empty. The item editor
 offers the saved gallery slots of the list being edited. Public rendering shows a
 selected slot's photo beside the item's set thumbnails, and skips slots that are

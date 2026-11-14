@@ -47,8 +47,8 @@ PocketBase, where member authentication is already configured.
 The `table_catalogs` collection stores `title`, `description`, list-level `content`
 (Markdown), and an ordered JSON `items` array (`{ title, codes, type, services,
 description?, url?, photos?, catalog? }` per item), an optional protected `photo`
-cover image, and up to five optional protected gallery photos (`photo_01` to
-`photo_05`) that items select by slot name,
+cover image, and up to ten optional protected gallery photos (`photo_01` to
+`photo_10`) that items select by slot name,
 `status` (`draft` or `published`), and the authenticated PocketBase user id in
 `owner`. `type` is `set`, `altbuild`, or `moc`; set and alternate-build items
 require at least one code, while MOC codes are optional and may contain multiple
@@ -84,8 +84,9 @@ applied before deploying the frontend. Protected-file access follows the list
 view rule: published covers work for anonymous visitors, while draft covers
 require the authenticated owner's short-lived file token.
 
-The five gallery photos use the same processing and protection. They are added
-by the `1794463444_table_catalogs_gallery` migration, which must also be applied
+The ten gallery photos use the same processing and protection. They are added
+by the `1794463444_table_catalogs_gallery` and
+`1794637169_table_catalogs_gallery_10` migrations, which must also be applied
 before deploying the frontend. Items record which gallery slots they show; the
 photos are rendered beside the item's set thumbnails. Protected gallery files
 follow the same view-rule access as the cover, so a published list's photos are

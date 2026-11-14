@@ -35,8 +35,3 @@ targetIndex from gap =
 
     else
         gap
-
-
-clamp : Int -> Int -> Int -> Int
-clamp low high value =
-    max low (min high value)

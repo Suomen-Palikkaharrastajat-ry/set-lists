@@ -12,9 +12,13 @@ import Browser.Dom as Dom
 import Browser.Events
 import Browser.Navigation as Nav
 import Component.Account as Account
+import Component.Badge as Badge
 import Component.Button as Button
+import Component.Dialog as Dialog
 import Component.Form as Form
 import Component.Layout as Layout
+import Component.Spinner as Spinner
+import Component.Tag as Tag
 import Component.Toast as Toast
 import Dict exposing (Dict)
 import FeatherIcons
@@ -30,15 +34,16 @@ import Markdown.Parser
 import Markdown.Renderer
 import MarkdownSafety
 import PhotoCrop
-import PocketBaseAuth exposing (AuthState(..), AuthUser, getToken)
+import PocketBaseAuth exposing (AuthState(..), AuthUser, getToken, isAuthenticated)
 import QRCode
 import Route
 import SiteSettings exposing (SiteSettings)
 import Svg.Attributes as SvgA
 import Task
-import Types exposing (ItemKind(..), ListForm, ListRecord, ListStatus(..), Service(..), SetItem)
+import Types exposing (ItemKind(..), ListForm, ListRecord, ListStatus(..), Service(..), SetItem, statusFromString, statusToString)
 import UiStrings
 import Url exposing (Url)
+import View.Icons exposing (featherIcon)
 
 
 type alias Flags =
@@ -430,29 +435,34 @@ init flags url key =
 loadRoute : String -> AuthState -> Route.Route -> RouteLoad
 loadRoute baseUrl auth route =
     let
+        emptyLoad =
+            { ownedLists = NotLoaded, currentList = NotLoaded, form = Types.emptyForm, cmd = Cmd.none }
+
         listCmd id =
-            Api.fetchList baseUrl (getToken auth) id (ListLoaded id)
+            { emptyLoad | currentList = Loading, cmd = Api.fetchList baseUrl (getToken auth) id (ListLoaded id) }
     in
     case route of
         Route.Home ->
-            case ( getToken auth, auth ) of
-                ( Just token, Authenticated user ) ->
-                    { ownedLists = Loading, currentList = NotLoaded, form = Types.emptyForm, cmd = Api.fetchLists baseUrl token user.id 1 (HomeListsLoaded user.id) }
+            case auth of
+                Authenticated user ->
+                    case getToken auth of
+                        Just token ->
+                            { emptyLoad | ownedLists = Loading, cmd = Api.fetchLists baseUrl token user.id 1 (HomeListsLoaded user.id) }
 
-                _ ->
-                    { ownedLists = NotLoaded, currentList = NotLoaded, form = Types.emptyForm, cmd = Cmd.none }
+                        Nothing ->
+                            emptyLoad
+
+                NotAuthenticated ->
+                    emptyLoad
 
         Route.PublicList id ->
-            { ownedLists = NotLoaded, currentList = Loading, form = Types.emptyForm, cmd = listCmd id }
-
-        Route.EditList Nothing ->
-            { ownedLists = NotLoaded, currentList = NotLoaded, form = Types.emptyForm, cmd = Cmd.none }
+            listCmd id
 
         Route.EditList (Just id) ->
-            { ownedLists = NotLoaded, currentList = Loading, form = Types.emptyForm, cmd = listCmd id }
+            listCmd id
 
-        Route.NotFound ->
-            { ownedLists = NotLoaded, currentList = NotLoaded, form = Types.emptyForm, cmd = Cmd.none }
+        _ ->
+            emptyLoad
 
 
 subscriptions : Model -> Sub Msg
@@ -1127,7 +1137,7 @@ update msg model =
                 else
                     case getToken model.auth of
                         Just token ->
-                            ( { updatedWithSearch | lookupRequestId = enrichmentRequestId, setSearchStates = Dict.insert index (SetSearchEnriching enrichmentRequestId suggestion.code suggestion.imageUrl) updatedWithSearch.setSearchStates }
+                            ( { updatedWithSearch | lookupRequestId = enrichmentRequestId }
                             , Cmd.batch
                                 [ Api.lookupSet model.pbBaseUrl token Api.BricksetProvider suggestion.code (SetSuggestionEnriched index enrichmentRequestId suggestion.code)
                                 , Task.attempt (\_ -> NoOp) (Dom.focus ("item-search-" ++ String.fromInt index))
@@ -1258,20 +1268,13 @@ update msg model =
                     ( model, Cmd.none )
 
         ItemTitleChanged index title ->
-            ( mapForm (\form -> { form | items = updateAt index (\item -> { item | title = title }) form.items }) model, Cmd.none )
+            ( updateItemAt index (\item -> { item | title = title }) model, Cmd.none )
 
         RemoveItemCode index code ->
             let
                 updated =
-                    mapForm
-                        (\form ->
-                            { form
-                                | items =
-                                    updateAt index
-                                        (\item -> Types.setItemCodesText (item.codes |> List.filter ((/=) code) |> String.join "\n") item)
-                                        form.items
-                            }
-                        )
+                    updateItemAt index
+                        (\item -> Types.setItemCodesText (item.codes |> List.filter ((/=) code) |> String.join "\n") item)
                         model
             in
             ( { updated
@@ -1283,13 +1286,13 @@ update msg model =
             )
 
         ItemKindChanged index kind ->
-            ( mapForm (\form -> { form | items = updateAt index (\item -> { item | kind = Types.itemKindFromString kind }) form.items }) model, Cmd.none )
+            ( updateItemAt index (\item -> { item | kind = Types.itemKindFromString kind }) model, Cmd.none )
 
         ItemDescriptionChanged index description ->
-            ( mapForm (\form -> { form | items = updateAt index (\item -> { item | description = description }) form.items }) model, Cmd.none )
+            ( updateItemAt index (\item -> { item | description = description }) model, Cmd.none )
 
         ItemUrlChanged index url ->
-            ( mapForm (\form -> { form | items = updateAt index (\item -> { item | url = url }) form.items }) model, Cmd.none )
+            ( updateItemAt index (\item -> { item | url = url }) model, Cmd.none )
 
         ItemPhotoToggled index slot enabled ->
             let
@@ -1305,7 +1308,7 @@ update msg model =
                                 )
                     }
             in
-            ( mapForm (\form -> { form | items = updateAt index toggle form.items }) model, Cmd.none )
+            ( updateItemAt index toggle model, Cmd.none )
 
         ApplyMarkdownFormat id prefix suffix linePrefix ->
             ( model, applyMarkdownFormatting { id = id, prefix = prefix, suffix = suffix, linePrefix = linePrefix } )
@@ -1336,18 +1339,7 @@ update msg model =
             ( model, Cmd.none )
 
         StatusChanged state ->
-            ( mapForm
-                (\form ->
-                    { form
-                        | status =
-                            if state == "published" then
-                                Published
-
-                            else
-                                Draft
-                    }
-                )
-                model
+            ( mapForm (\form -> { form | status = Types.statusFromString state }) model
             , Cmd.none
             )
 
@@ -1387,7 +1379,7 @@ update msg model =
                     in
                     { item | services = services }
             in
-            ( mapForm (\form -> { form | items = updateAt index toggle form.items }) model, Cmd.none )
+            ( updateItemAt index toggle model, Cmd.none )
 
         ToggleSetAccordion index ->
             ( { model
@@ -1660,46 +1652,30 @@ moveOpenSetIndex from to maybeOpenIndex =
         maybeOpenIndex
 
 
-editorTabOrder : List EditorTab
-editorTabOrder =
-    [ ItemsTab, DescriptionTab, PhotosTab ]
-
-
 editorTabForKey : EditorTab -> String -> EditorTab
 editorTabForKey activeTab key =
-    let
-        lastIndex =
-            List.length editorTabOrder - 1
-
-        activeIndex =
-            editorTabOrder
-                |> List.indexedMap Tuple.pair
-                |> List.filter (\( _, tab ) -> tab == activeTab)
-                |> List.head
-                |> Maybe.map Tuple.first
-                |> Maybe.withDefault 0
-
-        tabAt index =
-            List.drop index editorTabOrder |> List.head |> Maybe.withDefault activeTab
-    in
     case key of
         "ArrowLeft" ->
-            tabAt
-                (if activeIndex == 0 then
-                    lastIndex
+            case activeTab of
+                ItemsTab ->
+                    PhotosTab
 
-                 else
-                    activeIndex - 1
-                )
+                DescriptionTab ->
+                    ItemsTab
+
+                PhotosTab ->
+                    DescriptionTab
 
         "ArrowRight" ->
-            tabAt
-                (if activeIndex == lastIndex then
-                    0
+            case activeTab of
+                ItemsTab ->
+                    DescriptionTab
 
-                 else
-                    activeIndex + 1
-                )
+                DescriptionTab ->
+                    PhotosTab
+
+                PhotosTab ->
+                    ItemsTab
 
         "Home" ->
             ItemsTab
@@ -1740,6 +1716,11 @@ editorPanelId tab =
 mapForm : (ListForm -> ListForm) -> Model -> Model
 mapForm transform model =
     { model | form = transform model.form }
+
+
+updateItemAt : Int -> (SetItem -> SetItem) -> Model -> Model
+updateItemAt index transform model =
+    mapForm (\form -> { form | items = updateAt index transform form.items }) model
 
 
 requiresAuth : Route.Route -> Bool
@@ -1975,7 +1956,10 @@ viewHome model =
                     ]
                 , case model.ownedLists of
                     Loading ->
-                        p [ class "type-body" ] [ text "Ladataan listoja…" ]
+                        div [ class "flex items-center gap-3 py-4 type-body" ]
+                            [ Spinner.view { size = Spinner.Medium, label = "Ladataan listoja…" }
+                            , span [] [ text "Ladataan listoja…" ]
+                            ]
 
                     LoadFailed message ->
                         p [ class "type-body text-brand-red" ] [ text message ]
@@ -2029,17 +2013,20 @@ statusBadge : ListStatus -> Html Msg
 statusBadge status =
     case status of
         Draft ->
-            span [ class "rounded bg-bg-subtle px-2 py-1 type-caption text-text-muted" ] [ text "Luonnos" ]
+            Badge.view { label = "Luonnos", color = Badge.Gray, size = Badge.Small }
 
         Published ->
-            span [ class "rounded bg-brand-green px-2 py-1 type-caption text-text-on-dark" ] [ text "Julkaistu" ]
+            Badge.view { label = "Julkaistu", color = Badge.Green, size = Badge.Small }
 
 
 viewPublicList : Model -> Html Msg
 viewPublicList model =
     case model.currentList of
         Loading ->
-            p [ class "type-body" ] [ text "Ladataan listaa…" ]
+            div [ class "flex items-center gap-3 py-4 type-body" ]
+                [ Spinner.view { size = Spinner.Medium, label = "Ladataan listaa…" }
+                , span [] [ text "Ladataan listaa…" ]
+                ]
 
         LoadFailed message ->
             section [ class "rounded-lg border border-border-default bg-white p-6" ]
@@ -2066,16 +2053,6 @@ viewPublicList model =
 
         NotLoaded ->
             text ""
-
-
-isAuthenticated : AuthState -> Bool
-isAuthenticated auth =
-    case auth of
-        Authenticated _ ->
-            True
-
-        NotAuthenticated ->
-            False
 
 
 isOwnedPublicList : Model -> Bool
@@ -2113,7 +2090,8 @@ viewListDetail model owned record =
         catalogsByCode =
             record.items
                 |> List.filterMap .catalog
-                |> List.foldl (\catalog catalogs -> Dict.insert catalog.code catalog catalogs) Dict.empty
+                |> List.map (\catalog -> ( catalog.code, catalog ))
+                |> Dict.fromList
 
         galleryUrls =
             Types.galleryPhotoSlots
@@ -2145,7 +2123,11 @@ viewListDetail model owned record =
                 [ a [ href "#/", class "text-brand underline" ] [ text "← Omat listat" ]
                 , div [ class "flex gap-2" ]
                     ((if record.status == Published then
-                        [ sharedButton "Tulosta" PrintClicked Button.Secondary False False ]
+                        [ Button.new { label = "Tulosta", onClick = PrintClicked }
+                            |> Button.withVariant Button.Secondary
+                            |> Button.withSize Button.Small
+                            |> Button.toHtml
+                        ]
 
                       else
                         []
@@ -2258,7 +2240,7 @@ viewSet catalogsByCode galleryUrls index item =
                         Nothing ->
                             text ""
                     ]
-                , viewItemThumbnails "float-left mr-4 mb-3 flex w-32 max-w-[45%] flex-col gap-2 sm:hidden" catalogsByCode galleryUrls item
+                , viewItemThumbnails "mb-3 flex w-full flex-wrap gap-2 sm:hidden" catalogsByCode galleryUrls item
                 , viewItemMarkdown item.description
                 ]
             , if List.isEmpty item.codes then
@@ -2315,6 +2297,7 @@ viewItemPhotoChoice model index item position slot =
         [ input
             [ id inputId
             , type_ "checkbox"
+            , class "accent-brand"
             , checked selected
             , disabled (not isSaved && not selected)
             , onCheck (ItemPhotoToggled index slot)
@@ -2427,17 +2410,13 @@ viewCodeLinks : List Service -> Dict String Types.SetCatalog -> String -> Html M
 viewCodeLinks services catalogsByCode code =
     div [ class "flex flex-wrap items-center gap-x-4 gap-y-2" ]
         [ span [ class "inline-flex items-center gap-2 type-mono" ]
-            ([ FeatherIcons.package
-                |> FeatherIcons.withSize 14
-                |> FeatherIcons.toHtml [ attribute "aria-hidden" "true", attribute "focusable" "false", SvgA.class "text-text-muted" ]
+            ([ span [ class "inline-flex items-center text-text-muted" ] [ featherIcon FeatherIcons.package 14 ]
              , text code
              ]
                 ++ (case catalogYearForCode catalogsByCode code of
                         Just year ->
                             [ span [ class "inline-flex items-center gap-1 type-body-small text-text-muted" ]
-                                [ FeatherIcons.calendar
-                                    |> FeatherIcons.withSize 14
-                                    |> FeatherIcons.toHtml [ attribute "aria-hidden" "true", attribute "focusable" "false" ]
+                                [ featherIcon FeatherIcons.calendar 14
                                 , text (String.fromInt year)
                                 ]
                             ]
@@ -2476,16 +2455,6 @@ itemKindName kind =
             "MOC"
 
 
-statusValue : ListStatus -> String
-statusValue status =
-    case status of
-        Draft ->
-            "draft"
-
-        Published ->
-            "published"
-
-
 viewMarkdown : String -> Html Msg
 viewMarkdown markdown =
     if String.trim markdown == "" then
@@ -2515,17 +2484,10 @@ viewMarkdownPreview markdown =
 
 markdownNodes : String -> List (Html Msg)
 markdownNodes markdown =
-    case Markdown.Parser.parse markdown of
-        Ok blocks ->
-            case Markdown.Renderer.render safeMarkdownRenderer blocks of
-                Ok nodes ->
-                    nodes
-
-                Err _ ->
-                    [ p [ class "whitespace-pre-wrap type-body" ] [ text markdown ] ]
-
-        Err _ ->
-            [ p [ class "whitespace-pre-wrap type-body" ] [ text markdown ] ]
+    Markdown.Parser.parse markdown
+        |> Result.mapError (\_ -> "")
+        |> Result.andThen (Markdown.Renderer.render safeMarkdownRenderer)
+        |> Result.withDefault [ p [ class "whitespace-pre-wrap type-body" ] [ text markdown ] ]
 
 
 safeMarkdownRenderer : Markdown.Renderer.Renderer (Html Msg)
@@ -2585,7 +2547,10 @@ viewEditor model maybeId =
                 Just _ ->
                     case model.currentList of
                         Loading ->
-                            p [ class "type-body" ] [ text "Ladataan muokattavaa listaa…" ]
+                            div [ class "flex items-center gap-3 py-4 type-body" ]
+                                [ Spinner.view { size = Spinner.Medium, label = "Ladataan muokattavaa listaa…" }
+                                , span [] [ text "Ladataan muokattavaa listaa…" ]
+                                ]
 
                         LoadFailed error ->
                             p [ class "type-body text-brand-red" ] [ text ("Listaa ei voitu avata: " ++ error) ]
@@ -2679,7 +2644,7 @@ viewEditForm model maybeId =
                     [ { value = "draft", label = "Luonnos — vain sinä näet" }
                     , { value = "published", label = "Julkaistu — jaettavissa linkillä" }
                     ]
-                , selected = statusValue model.form.status
+                , selected = Types.statusToString model.form.status
                 , onSelect = StatusChanged
                 , layout = Form.Inline
                 }
@@ -2820,7 +2785,7 @@ viewPhotoSlotEditor model maybeId slot labelText =
              , attribute "accept" "image/*"
              , attribute "aria-describedby" "list-photo-help"
              , disabled (maybeId == Nothing || photoActionInProgress model.photoUploadState)
-             , class inputClass
+             , class (inputClass ++ " file:mr-4 file:py-2 file:px-4 file:rounded file:border-0 file:bg-bg-subtle file:text-brand file:cursor-pointer hover:file:bg-border-default")
              ]
                 ++ photoInputAttributes
             )
@@ -2851,14 +2816,10 @@ viewPhotoSlotEditor model maybeId slot labelText =
 
                     Nothing ->
                         text ""
-                , button
-                    [ type_ "button"
-                    , onClick (ListPhotoClearClicked slot)
-                    , disabled (photoActionInProgress model.photoUploadState)
-                    , attribute "aria-label" ("Poista kuva: " ++ labelText)
-                    , class "inline-flex min-h-11 items-center justify-center rounded border border-red-300 px-4 py-2 type-body-small font-semibold text-red-700 hover:bg-red-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-red-500 disabled:cursor-not-allowed disabled:opacity-50"
-                    ]
-                    [ text "Poista kuva" ]
+                , Button.new { label = "Poista kuva", onClick = ListPhotoClearClicked slot }
+                    |> Button.withVariant Button.Danger
+                    |> Button.withDisabled (photoActionInProgress model.photoUploadState)
+                    |> Button.toHtml
                 ]
 
           else
@@ -2897,7 +2858,7 @@ photoCropPanel labelText crop =
                     , value (PhotoCrop.ratioId ratio)
                     , checked (crop.ratio == ratio)
                     , onCheck (\_ -> PhotoCropRatioSelected ratio)
-                    , class "h-5 w-5 shrink-0"
+                    , class "h-5 w-5 shrink-0 accent-brand"
                     ]
                     []
                 , text (PhotoCrop.ratioLabel ratio)
@@ -2971,13 +2932,14 @@ photoCropPanel labelText crop =
             , toMsg = PhotoCropFocusYChanged
             }
         , div [ class "flex flex-wrap items-center gap-3" ]
-            [ button
-                [ type_ "button"
-                , onClick PhotoCropCancelClicked
-                , class "inline-flex min-h-11 items-center justify-center rounded border border-brand bg-white px-4 py-2 type-body-small font-semibold text-brand hover:bg-bg-subtle focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand"
-                ]
-                [ text "Peruuta" ]
-            , sharedButton "Tallenna kuva" PhotoCropApplyClicked Button.Primary False False
+            [ Button.new { label = "Peruuta", onClick = PhotoCropCancelClicked }
+                |> Button.withVariant Button.Secondary
+                |> Button.withSize Button.Medium
+                |> Button.toHtml
+            , Button.new { label = "Tallenna kuva", onClick = PhotoCropApplyClicked }
+                |> Button.withVariant Button.Primary
+                |> Button.withSize Button.Medium
+                |> Button.toHtml
             ]
         ]
 
@@ -3005,7 +2967,7 @@ cropSlider config =
             , attribute "step" (String.fromFloat config.step)
             , value (String.fromFloat config.current)
             , onInput config.toMsg
-            , class "block min-h-11 w-full"
+            , class "block min-h-11 w-full accent-brand"
             ]
             []
         ]
@@ -3150,9 +3112,9 @@ editorTabs activeTab =
                 ]
                 [ text labelText ]
     in
-    div [ class "flex items-center" ]
+    div [ class "flex flex-wrap items-center justify-between gap-3" ]
         [ div
-            [ class "flex border-b border-border-default"
+            [ class "flex flex-wrap border-b border-border-default"
             , attribute "role" "tablist"
             , attribute "aria-label" "Listan muokkausosiot"
             , attribute "aria-orientation" "horizontal"
@@ -3162,8 +3124,12 @@ editorTabs activeTab =
             , tabButton PhotosTab "Kuvat"
             ]
         , if activeTab == ItemsTab then
-            div [ class "ml-auto" ]
-                [ sharedButton "Lisää kohde" AddSet Button.Secondary False False ]
+            div [ class "sm:ml-auto" ]
+                [ Button.new { label = "Lisää kohde", onClick = AddSet }
+                    |> Button.withVariant Button.Secondary
+                    |> Button.withSize Button.Small
+                    |> Button.toHtml
+                ]
 
           else
             text ""
@@ -3273,123 +3239,53 @@ sharedButton labelText message variant isDisabled isLoading =
 
 iconButton : String -> FeatherIcons.Icon -> Msg -> Bool -> Html Msg
 iconButton labelText icon message isDisabled =
-    button
-        ([ type_ "button"
-         , class "inline-flex h-[45px] w-[45px] shrink-0 items-center justify-center rounded border border-brand bg-white text-brand hover:bg-bg-subtle focus-visible:ring-2 focus-visible:ring-brand disabled:cursor-not-allowed disabled:opacity-50"
-         , disabled isDisabled
-         , attribute "aria-label" labelText
-         , attribute "title" labelText
-         ]
-            ++ (if isDisabled then
-                    []
-
-                else
-                    [ onClick message ]
-               )
-        )
-        [ icon
-            |> FeatherIcons.withSize 16
-            |> FeatherIcons.toHtml [ attribute "aria-hidden" "true", attribute "focusable" "false" ]
-        ]
+    Button.new { label = labelText, onClick = message }
+        |> Button.withVariant Button.Secondary
+        |> Button.withIcon icon
+        |> Button.iconOnly
+        |> Button.withDisabled isDisabled
+        |> Button.toHtml
 
 
 viewDeleteConfirmation : Bool -> Html Msg
 viewDeleteConfirmation isOpen =
-    if not isOpen then
-        text ""
-
-    else
-        div
-            [ class "no-print fixed inset-0 z-50 flex items-center justify-center p-4"
-            , attribute "role" "alertdialog"
-            , attribute "aria-modal" "true"
-            , attribute "aria-labelledby" "delete-dialog-title"
-            , attribute "aria-describedby" "delete-dialog-description"
-            , deleteDialogKeyHandler
-            ]
-            [ div
-                [ class "absolute inset-0 bg-black/50"
-                , attribute "aria-hidden" "true"
-                , onClick CancelDelete
-                ]
-                []
-            , section [ class "relative z-10 w-full max-w-lg rounded-xl bg-white p-6 shadow-xl" ]
-                [ header [ class "mb-4 flex items-center justify-between gap-4" ]
-                    [ h2 [ id "delete-dialog-title", class "type-h3" ] [ text "Poistetaanko lista?" ]
-                    , button
-                        [ type_ "button"
-                        , id "delete-dialog-close"
-                        , class "inline-flex h-11 w-11 items-center justify-center rounded text-text-muted hover:bg-bg-subtle focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand"
-                        , attribute "aria-label" "Sulje"
-                        , onClick CancelDelete
-                        ]
-                        [ FeatherIcons.x |> FeatherIcons.withSize 18 |> FeatherIcons.toHtml [ attribute "aria-hidden" "true", attribute "focusable" "false" ] ]
+    Dialog.view
+        { title = "Poistetaanko lista?"
+        , body = [ p [ id "delete-dialog-description", class "type-body" ] [ text "Listan poistamista ei voi perua." ] ]
+        , footer =
+            Just
+                (div [ class "flex flex-wrap justify-end gap-3" ]
+                    [ Button.new { label = "Peruuta", onClick = CancelDelete }
+                        |> Button.withVariant Button.Secondary
+                        |> Button.withSize Button.Medium
+                        |> Button.toHtml
+                    , Button.new { label = "Poista lista", onClick = ConfirmDelete }
+                        |> Button.withVariant Button.Danger
+                        |> Button.withSize Button.Medium
+                        |> Button.toHtml
                     ]
-                , p [ id "delete-dialog-description", class "type-body" ] [ text "Listan poistamista ei voi perua." ]
-                , div [ class "mt-6 flex flex-wrap justify-end gap-3" ]
-                    [ button
-                        [ type_ "button"
-                        , id "delete-dialog-cancel"
-                        , class "inline-flex min-h-11 items-center justify-center rounded border border-border-default bg-white px-4 py-2 type-body-small font-semibold text-brand hover:bg-bg-subtle focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand"
-                        , onClick CancelDelete
-                        ]
-                        [ text "Peruuta" ]
-                    , button
-                        [ type_ "button"
-                        , id "delete-dialog-confirm"
-                        , class "inline-flex min-h-11 items-center justify-center rounded bg-red-600 px-4 py-2 type-body-small font-semibold text-white hover:bg-red-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-red-500"
-                        , onClick ConfirmDelete
-                        ]
-                        [ text "Poista lista" ]
-                    ]
-                ]
-            ]
-
-
-deleteDialogKeyHandler : Html.Attribute Msg
-deleteDialogKeyHandler =
-    preventDefaultOn "keydown"
-        (Decode.map3
-            (\key shiftKey targetId ->
-                if key == "Escape" then
-                    ( CancelDelete, True )
-
-                else if key == "Tab" && shiftKey && targetId == "delete-dialog-close" then
-                    ( FocusDeleteDialog "delete-dialog-confirm", True )
-
-                else if key == "Tab" && not shiftKey && targetId == "delete-dialog-confirm" then
-                    ( FocusDeleteDialog "delete-dialog-close", True )
-
-                else
-                    ( NoOp, False )
-            )
-            (Decode.field "key" Decode.string)
-            (Decode.field "shiftKey" Decode.bool)
-            (Decode.at [ "target", "id" ] Decode.string)
-        )
+                )
+        , isOpen = isOpen
+        , onClose = CancelDelete
+        , closeLabel = "Sulje"
+        }
 
 
 deleteListButton : Bool -> Html Msg
 deleteListButton isDisabled =
-    button
-        [ type_ "button"
-        , id "delete-list-button"
-        , disabled isDisabled
-        , class "ml-auto inline-flex min-h-11 items-center justify-center rounded bg-red-600 px-4 py-2 type-body-small font-semibold text-white hover:bg-red-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-red-500 disabled:cursor-not-allowed disabled:opacity-50"
-        , onClick DeleteClicked
+    span [ id "delete-list-button", attribute "tabindex" "-1", class "ml-auto inline-flex" ]
+        [ Button.new { label = "Poista lista", onClick = DeleteClicked }
+            |> Button.withVariant Button.Danger
+            |> Button.withDisabled isDisabled
+            |> Button.toHtml
         ]
-        [ text "Poista lista" ]
 
 
 deleteSetButton : Int -> String -> Html Msg
 deleteSetButton index itemTitle =
-    button
-        [ type_ "button"
-        , class "inline-flex min-h-11 items-center justify-center rounded bg-red-600 px-4 py-2 type-body-small font-semibold text-white transition-all hover:bg-red-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-red-500"
-        , attribute "aria-label" ("Poista kohde: " ++ itemTitle)
-        , onClick (RemoveSet index)
-        ]
-        [ text "Poista" ]
+    Button.new { label = "Poista", onClick = RemoveSet index }
+        |> Button.withVariant Button.Danger
+        |> Button.toHtml
 
 
 fieldLabel : String -> String -> Html Msg -> Html Msg
@@ -3472,15 +3368,15 @@ viewEditSet model previewIds items index item =
                     )
                 ]
                 [ span [ class "min-w-0 truncate type-h4" ] [ text itemTitle ]
-                , span [ class "shrink-0 text-text-muted", attribute "aria-hidden" "true" ]
-                    [ (if isOpen then
-                        FeatherIcons.chevronUp
+                , span [ class "shrink-0 text-text-muted" ]
+                    [ featherIcon
+                        (if isOpen then
+                            FeatherIcons.chevronUp
 
-                       else
-                        FeatherIcons.chevronDown
-                      )
-                        |> FeatherIcons.withSize 18
-                        |> FeatherIcons.toHtml [ attribute "focusable" "false" ]
+                         else
+                            FeatherIcons.chevronDown
+                        )
+                        18
                     ]
                 ]
             , deleteSetButton index itemTitle
@@ -3509,7 +3405,7 @@ viewEditSet model previewIds items index item =
                     text ""
 
                   else
-                    p [ class "mt-1 type-caption text-red-700" ] [ text "Otsikko vaaditaan jokaiselle kohteelle." ]
+                    p [ class "mt-1 type-caption text-brand-red" ] [ text "Otsikko vaaditaan jokaiselle kohteelle." ]
                 , markdownEditor
                     (List.member ("item-description-" ++ String.fromInt index) previewIds)
                     ("item-description-" ++ String.fromInt index)
@@ -3641,10 +3537,16 @@ viewSetSearch model index item =
         status =
             case searchState of
                 Just (SetSearchWaiting _ _) ->
-                    p [ attribute "aria-live" "polite", class "type-caption text-text-muted" ] [ text "Etsitään Rebrickablesta…" ]
+                    div [ attribute "aria-live" "polite", class "flex items-center gap-2 type-caption text-text-muted" ]
+                        [ Spinner.view { size = Spinner.Small, label = "Etsitään Rebrickablesta…" }
+                        , span [] [ text "Etsitään Rebrickablesta…" ]
+                        ]
 
                 Just (SetSearchLoading _ _) ->
-                    p [ attribute "aria-live" "polite", class "type-caption text-text-muted" ] [ text "Etsitään Rebrickablesta…" ]
+                    div [ attribute "aria-live" "polite", class "flex items-center gap-2 type-caption text-text-muted" ]
+                        [ Spinner.view { size = Spinner.Small, label = "Etsitään Rebrickablesta…" }
+                        , span [] [ text "Etsitään Rebrickablesta…" ]
+                        ]
 
                 Just (SetSearchResults _ _ results) ->
                     if List.isEmpty results then
@@ -3657,10 +3559,16 @@ viewSetSearch model index item =
                     p [ attribute "aria-live" "polite", class "type-caption text-brand-red" ] [ text message ]
 
                 Just (SetSearchEnriching _ _ _) ->
-                    p [ attribute "aria-live" "polite", class "type-caption text-text-muted" ] [ text "Tietoja ja pikkukuvaa haetaan Bricksetistä…" ]
+                    div [ attribute "aria-live" "polite", class "flex items-center gap-2 type-caption text-text-muted" ]
+                        [ Spinner.view { size = Spinner.Small, label = "Tietoja ja pikkukuvaa haetaan Bricksetistä…" }
+                        , span [] [ text "Tietoja ja pikkukuvaa haetaan Bricksetistä…" ]
+                        ]
 
                 Just (SetSearchSavingThumbnail _ _ _) ->
-                    p [ attribute "aria-live" "polite", class "type-caption text-text-muted" ] [ text "Muunnetaan pikkukuvaa 256px WebP-muotoon ja tallennetaan…" ]
+                    div [ attribute "aria-live" "polite", class "flex items-center gap-2 type-caption text-text-muted" ]
+                        [ Spinner.view { size = Spinner.Small, label = "Muunnetaan pikkukuvaa 256px WebP-muotoon ja tallennetaan…" }
+                        , span [] [ text "Muunnetaan pikkukuvaa 256px WebP-muotoon ja tallennetaan…" ]
+                        ]
 
                 Just (SetSearchEnriched _ _ hasBricksetMetadata hasThumbnail) ->
                     p [ attribute "aria-live" "polite", class "type-caption text-text-muted" ]
@@ -3702,7 +3610,7 @@ viewSetSearch model index item =
             li
                 [ id (inputId ++ "-option-" ++ String.fromInt suggestionIndex)
                 , class
-                    ("cursor-pointer px-3 py-2 "
+                    ("flex items-center gap-3 cursor-pointer px-3 py-2 "
                         ++ (if suggestionIndex == activeSuggestionIndex then
                                 "bg-bg-subtle"
 
@@ -3720,9 +3628,27 @@ viewSetSearch model index item =
                         "false"
                     )
                 ]
-                [ span [ class "block type-body-small" ] [ text suggestion.name ]
-                , span [ class "block type-caption text-text-muted" ] [ text metadata ]
-                ]
+                ((case suggestion.imageUrl of
+                    Just url ->
+                        [ img
+                            [ src url
+                            , alt ""
+                            , attribute "loading" "lazy"
+                            , attribute "referrerpolicy" "no-referrer"
+                            , class "h-12 w-12 shrink-0 rounded object-contain bg-bg-subtle"
+                            ]
+                            []
+                        ]
+
+                    Nothing ->
+                        []
+                 )
+                    ++ [ div [ class "min-w-0 flex-1" ]
+                            [ span [ class "block truncate type-body-small font-medium" ] [ text suggestion.name ]
+                            , span [ class "block truncate type-caption text-text-muted" ] [ text metadata ]
+                            ]
+                       ]
+                )
 
         suggestionsView =
             case searchState of
@@ -3733,7 +3659,7 @@ viewSetSearch model index item =
                     else
                         ul
                             [ id listId
-                            , class "max-h-72 overflow-y-auto rounded border border-border-default bg-white"
+                            , class "max-h-72 overflow-y-auto rounded-lg border border-border-default bg-white shadow-lg"
                             , attribute "role" "listbox"
                             , attribute "aria-label" "Rebrickable-settiehdotukset"
                             ]
@@ -3752,16 +3678,11 @@ viewSetSearch model index item =
                     ul [ class "flex flex-wrap gap-2" ]
                         (List.map
                             (\code ->
-                                li [ class "inline-flex items-center gap-1 rounded bg-bg-subtle px-2 py-1" ]
-                                    [ span [ class "type-mono" ] [ text code ]
-                                    , button
-                                        [ type_ "button"
-                                        , class "inline-flex h-7 w-7 items-center justify-center rounded text-text-muted hover:bg-white hover:text-brand focus-visible:ring-2 focus-visible:ring-brand"
-                                        , onClick (RemoveItemCode index code)
-                                        , attribute "aria-label" ("Poista tunnus " ++ code)
-                                        , attribute "title" ("Poista tunnus " ++ code)
-                                        ]
-                                        [ FeatherIcons.x |> FeatherIcons.withSize 14 |> FeatherIcons.toHtml [ attribute "aria-hidden" "true" ] ]
+                                li []
+                                    [ Tag.view
+                                        { label = code
+                                        , onRemove = Just { msg = RemoveItemCode index code, label = "Poista tunnus " ++ code }
+                                        }
                                     ]
                             )
                             item.codes
@@ -3810,7 +3731,7 @@ viewSetSearch model index item =
 serviceCheckbox : Int -> List Service -> Service -> Html Msg
 serviceCheckbox index chosen service =
     label [ class "inline-flex min-h-11 items-center gap-2 type-body-small" ]
-        [ input [ type_ "checkbox", checked (List.member service chosen), onCheck (ToggleService index service) ] []
+        [ input [ type_ "checkbox", class "accent-brand", checked (List.member service chosen), onCheck (ToggleService index service) ] []
         , text (Types.serviceName service)
         ]
 

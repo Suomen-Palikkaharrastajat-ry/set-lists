@@ -8,7 +8,7 @@ import Http
 import Json.Decode as Decode exposing (Decoder)
 import Json.Encode as Encode
 import MarkdownSafety
-import Types exposing (CatalogProvider(..), ListForm, ListRecord, ListStatus(..), Service(..), SetCatalog, SetItem)
+import Types exposing (CatalogProvider(..), ListForm, ListRecord, ListStatus(..), Service(..), SetCatalog, SetItem, statusFromString, statusToString)
 import Url
 
 
@@ -43,13 +43,19 @@ type alias SetSuggestion =
     }
 
 
+decodeThumbnailUrl : Decoder (Maybe String)
+decodeThumbnailUrl =
+    Decode.nullable Decode.string
+        |> Decode.map (Maybe.andThen safeThumbnailUrl)
+
+
 decodeSetLookupResult : Decoder SetLookupResult
 decodeSetLookupResult =
     Decode.map5 SetLookupResult
         (Decode.field "name" Decode.string)
         (Decode.field "year" (Decode.nullable Decode.int))
         (Decode.field "pieces" (Decode.nullable Decode.int))
-        (Decode.field "imageUrl" (Decode.map (Maybe.andThen safeThumbnailUrl) (Decode.nullable Decode.string)))
+        (Decode.field "imageUrl" decodeThumbnailUrl)
         (Decode.field "sourceUrl" Decode.string)
 
 
@@ -60,7 +66,7 @@ decodeSetSuggestion =
         (Decode.field "name" Decode.string)
         (Decode.field "year" (Decode.nullable Decode.int))
         (Decode.field "pieces" (Decode.nullable Decode.int))
-        (Decode.field "imageUrl" (Decode.nullable Decode.string |> Decode.map (Maybe.andThen safeThumbnailUrl)))
+        (Decode.field "imageUrl" decodeThumbnailUrl)
         (Decode.field "sourceUrl" Decode.string)
 
 
@@ -285,15 +291,6 @@ validateCatalog item catalog =
         Nothing
 
 
-statusFromString : String -> ListStatus
-statusFromString value =
-    if value == "published" then
-        Published
-
-    else
-        Draft
-
-
 fetchLists : String -> String -> String -> Int -> (Result Http.Error ListPage -> msg) -> Cmd msg
 fetchLists baseUrl token ownerId page toMsg =
     Http.request
@@ -422,16 +419,6 @@ catalogProviderName provider =
 
         BricksetCatalog ->
             "brickset"
-
-
-statusToString : ListStatus -> String
-statusToString status =
-    case status of
-        Draft ->
-            "draft"
-
-        Published ->
-            "published"
 
 
 saveList : String -> String -> String -> Maybe String -> ListForm -> (Result Http.Error ListRecord -> msg) -> Cmd msg

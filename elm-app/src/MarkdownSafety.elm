@@ -4,7 +4,6 @@ module MarkdownSafety exposing (safeUrl, safeWebUrl)
 -}
 
 import Char
-import String
 
 
 safeUrl : String -> Maybe String

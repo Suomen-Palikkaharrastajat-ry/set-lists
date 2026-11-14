@@ -148,9 +148,14 @@ suite =
                     ]
         , test "Given gallery photos, when a record is decoded, then only saved photo slots are retained" <|
             \_ ->
-                Decode.decodeString Api.decodeList "{\"id\":\"list-id\",\"title\":\"Catalog\",\"status\":\"published\",\"photo_02\":\"second.webp\",\"photo_05\":\"\",\"photo_09\":\"other.webp\"}"
+                Decode.decodeString Api.decodeList "{\"id\":\"list-id\",\"title\":\"Catalog\",\"status\":\"published\",\"photo_02\":\"second.webp\",\"photo_05\":\"\",\"photo_99\":\"other.webp\"}"
                     |> Result.map .savedPhotos
                     |> Expect.equal (Ok (Dict.fromList [ ( "photo_02", "second.webp" ) ]))
+        , test "Given gallery photos up to photo_10, when a record is decoded, then all valid slots are retained" <|
+            \_ ->
+                Decode.decodeString Api.decodeList "{\"id\":\"list-id\",\"title\":\"Catalog\",\"status\":\"published\",\"photo_01\":\"first.webp\",\"photo_10\":\"tenth.webp\"}"
+                    |> Result.map .savedPhotos
+                    |> Expect.equal (Ok (Dict.fromList [ ( "photo_01", "first.webp" ), ( "photo_10", "tenth.webp" ) ]))
         , test "Given a list photo, when its URL is built, then the record and file names are path-encoded" <|
             \_ ->
                 Decode.decodeString Api.decodeList "{\"id\":\"list/id\",\"title\":\"Catalog\",\"status\":\"published\",\"photo\":\"cover photo.webp\"}"
@@ -176,6 +181,11 @@ suite =
                 Decode.decodeString Api.decodeSetItem "{\"codes\":[\"75192-1\"],\"type\":\"set\",\"services\":[],\"photos\":[\"photo_03\",\"photo\",\"photo_01\",\"photo_03\",\"https://example.com/x.webp\"]}"
                     |> Result.map .photos
                     |> Expect.equal (Ok [ "photo_01", "photo_03" ])
+        , test "Given item photo slots including photo_10, when decoded, then slots up to photo_10 are retained in gallery order" <|
+            \_ ->
+                Decode.decodeString Api.decodeSetItem "{\"codes\":[\"75192-1\"],\"type\":\"set\",\"services\":[],\"photos\":[\"photo_10\",\"photo_06\",\"photo_01\",\"photo_99\"]}"
+                    |> Result.map .photos
+                    |> Expect.equal (Ok [ "photo_01", "photo_06", "photo_10" ])
         , test "Given an item with gallery slots, when encoded and decoded, then the selection is retained and empty selections are omitted" <|
             \_ ->
                 let

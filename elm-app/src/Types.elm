@@ -1,4 +1,37 @@
-module Types exposing (CatalogProvider(..), ItemKind(..), ListForm, ListRecord, ListStatus(..), Service(..), SetCatalog, SetItem, acceptCatalog, clearPhotoSlotFromItems, coverPhotoSlot, emptyForm, emptySetItem, fillTitleFromLookup, firstLookupCode, galleryPhotoSlots, itemHasTitle, itemHasValidCodes, itemKindFromString, itemKindToString, lookupCodeMatches, normalizeCodes, normalizePhotoSlots, photoSlots, savedPhotoFilename, serviceFromString, serviceName, serviceToString, setItemCodesText, setSavedPhoto, validSetCode)
+module Types exposing
+    ( CatalogProvider(..)
+    , ItemKind(..)
+    , ListForm
+    , ListRecord
+    , ListStatus(..)
+    , Service(..)
+    , SetCatalog
+    , SetItem
+    , acceptCatalog
+    , clearPhotoSlotFromItems
+    , coverPhotoSlot
+    , emptyForm
+    , emptySetItem
+    , fillTitleFromLookup
+    , firstLookupCode
+    , galleryPhotoSlots
+    , itemHasTitle
+    , itemHasValidCodes
+    , itemKindFromString
+    , itemKindToString
+    , lookupCodeMatches
+    , normalizePhotoSlots
+    , photoSlots
+    , savedPhotoFilename
+    , serviceFromString
+    , serviceName
+    , serviceToString
+    , setItemCodesText
+    , setSavedPhoto
+    , statusFromString
+    , statusToString
+    , validSetCode
+    )
 
 {-| Domain types for persisted table catalogs and their ordered rows.
 -}
@@ -73,7 +106,7 @@ coverPhotoSlot =
 -}
 galleryPhotoSlots : List String
 galleryPhotoSlots =
-    [ "photo_01", "photo_02", "photo_03", "photo_04", "photo_05" ]
+    [ "photo_01", "photo_02", "photo_03", "photo_04", "photo_05", "photo_06", "photo_07", "photo_08", "photo_09", "photo_10" ]
 
 
 photoSlots : List String
@@ -98,6 +131,26 @@ clearPhotoSlotFromItems slot items =
 type ListStatus
     = Draft
     | Published
+
+
+statusToString : ListStatus -> String
+statusToString status =
+    case status of
+        Draft ->
+            "draft"
+
+        Published ->
+            "published"
+
+
+statusFromString : String -> ListStatus
+statusFromString raw =
+    case raw of
+        "published" ->
+            Published
+
+        _ ->
+            Draft
 
 
 type alias ListRecord =
@@ -180,20 +233,11 @@ validSetCode code =
                 >= 1
                 && String.length variant
                 <= 3
-                && String.all isAsciiDigit number
-                && String.all isAsciiDigit variant
+                && String.all Char.isDigit number
+                && String.all Char.isDigit variant
 
         _ ->
             False
-
-
-isAsciiDigit : Char -> Bool
-isAsciiDigit char =
-    let
-        value =
-            Char.toCode char
-    in
-    value >= 48 && value <= 57
 
 
 firstLookupCode : SetItem -> Maybe String

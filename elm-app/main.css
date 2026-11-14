@@ -7,6 +7,7 @@
 @layer base {
   html, body, #app { min-height: 100%; margin: 0; font-family: var(--font-sans); }
   button:not([disabled]) { cursor: pointer; }
+  input[type="checkbox"], input[type="radio"], input[type="range"] { accent-color: var(--color-brand); }
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -15,6 +16,32 @@
 
 .markdown-content > :first-child { margin-top: 0; }
 .markdown-content > :last-child { margin-bottom: 0; }
+.markdown-content h1 { font-size: var(--type-h2-size, 1.5rem); font-weight: 700; color: var(--color-brand); margin-block: 1rem 0.5rem; }
+.markdown-content h2 { font-size: var(--type-h3-size, 1.25rem); font-weight: 700; color: var(--color-brand); margin-block: 0.875rem 0.375rem; }
+.markdown-content h3 { font-size: var(--type-h4-size, 1.125rem); font-weight: 700; color: var(--color-brand); margin-block: 0.75rem 0.25rem; }
+.markdown-content p { margin-block: 0.5rem; }
+.markdown-content blockquote {
+  border-inline-start: 4px solid var(--color-brand-yellow, #ffd500);
+  padding-inline-start: 1rem;
+  margin-inline: 0;
+  margin-block: 0.75rem;
+  font-style: italic;
+  color: var(--color-text-muted, #555555);
+}
+.markdown-content a {
+  color: var(--color-brand);
+  text-decoration: underline;
+}
+.markdown-content a:hover {
+  text-decoration: none;
+}
+.markdown-content code {
+  font-family: var(--font-mono, monospace);
+  background-color: var(--color-bg-subtle, #f5f5f5);
+  padding: 0.125rem 0.25rem;
+  border-radius: 0.25rem;
+  font-size: 0.875em;
+}
 .markdown-content ul { list-style: none; padding-inline-start: 1.25em; }
 .markdown-content ul > li { position: relative; }
 .markdown-content ul > li::before { content: "–"; position: absolute; inset-inline-start: -1.25em; }
@@ -32,11 +59,9 @@
   .print-list { display: block !important; width: auto !important; max-width: none !important; min-height: 0 !important; margin: 0 !important; padding: 0 !important; box-shadow: none !important; border: 0 !important; }
   .print-list a { color: inherit !important; text-decoration: none !important; }
   .print-break { break-inside: avoid; }
-  .print-items { margin-top: 1.25rem !important; }
-  .print-items > * + * { border-top-width: 0 !important; }
+  .print-title-page, .print-items { display: none !important; }
 
   body * { visibility: hidden !important; }
-  .print-list, .print-list * { visibility: visible !important; }
   .print-qr, .print-qr * { visibility: visible !important; }
   .print-only { display: flex !important; }
   .print-qr {
@@ -50,6 +75,5 @@
     margin: 0;
     background: white;
   }
-  .print-title-page { break-before: page; page-break-before: always; }
   .print-qr-code svg { width: 90mm !important; height: 90mm !important; display: block; }
 }

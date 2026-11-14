@@ -3,7 +3,6 @@ module PhotoCrop exposing
     , CropRegion
     , State
     , allRatios
-    , coverMaxDimension
     , cropRegion
     , initialState
     , maxZoom
@@ -12,7 +11,6 @@ module PhotoCrop exposing
     , panBy
     , ratioId
     , ratioLabel
-    , ratioValue
     , zoomAt
     )
 
@@ -141,22 +139,22 @@ cropRegion : State -> CropRegion
 cropRegion state =
     let
         zoom =
-            clampFloat minZoom maxZoom state.zoom
+            clamp minZoom maxZoom state.zoom
 
         ( baseWidth, baseHeight ) =
             fittedSize state
 
         width =
-            clampInt 1 state.sourceWidth (round (baseWidth / zoom))
+            clamp 1 state.sourceWidth (round (baseWidth / zoom))
 
         height =
-            clampInt 1 state.sourceHeight (round (baseHeight / zoom))
+            clamp 1 state.sourceHeight (round (baseHeight / zoom))
 
         x =
-            round (clampFloat 0 1 state.focusX * toFloat (state.sourceWidth - width))
+            round (clamp 0 1 state.focusX * toFloat (state.sourceWidth - width))
 
         y =
-            round (clampFloat 0 1 state.focusY * toFloat (state.sourceHeight - height))
+            round (clamp 0 1 state.focusY * toFloat (state.sourceHeight - height))
     in
     { x = x, y = y, width = width, height = height }
 
@@ -183,7 +181,7 @@ zoomAt : Float -> Float -> Float -> State -> State
 zoomAt factor pointerX pointerY state =
     let
         zoom =
-            clampFloat minZoom maxZoom (state.zoom * factor)
+            clamp minZoom maxZoom (state.zoom * factor)
 
         before =
             visibleFraction state
@@ -193,8 +191,8 @@ zoomAt factor pointerX pointerY state =
     in
     { state
         | zoom = zoom
-        , focusX = anchoredFocus before.width after.width (clampFloat 0 1 pointerX) state.focusX
-        , focusY = anchoredFocus before.height after.height (clampFloat 0 1 pointerY) state.focusY
+        , focusX = anchoredFocus before.width after.width (clamp 0 1 pointerX) state.focusX
+        , focusY = anchoredFocus before.height after.height (clamp 0 1 pointerY) state.focusY
     }
 
 
@@ -223,7 +221,7 @@ visibleFraction : State -> { width : Float, height : Float }
 visibleFraction state =
     let
         zoom =
-            clampFloat minZoom maxZoom state.zoom
+            clamp minZoom maxZoom state.zoom
 
         ( baseWidth, baseHeight ) =
             fittedSize state
@@ -239,7 +237,7 @@ panFocus visible delta focus =
         focus
 
     else
-        clampFloat 0 1 (focus + delta * visible / (1 - visible))
+        clamp 0 1 (focus + delta * visible / (1 - visible))
 
 
 anchoredFocus : Float -> Float -> Float -> Float -> Float
@@ -255,7 +253,7 @@ anchoredFocus beforeVisible afterVisible pointer focus =
             start =
                 pointed - pointer * afterVisible
         in
-        clampFloat 0 1 (start / (1 - afterVisible))
+        clamp 0 1 (start / (1 - afterVisible))
 
 
 {-| Pixel size of the stored cover, matching the browser's thumbnail sizing: never upscaled and
@@ -270,13 +268,3 @@ outputSize region =
     { width = max 1 (round (toFloat region.width * scale))
     , height = max 1 (round (toFloat region.height * scale))
     }
-
-
-clampFloat : Float -> Float -> Float -> Float
-clampFloat low high value =
-    max low (min high value)
-
-
-clampInt : Int -> Int -> Int -> Int
-clampInt low high value =
-    max low (min high value)
